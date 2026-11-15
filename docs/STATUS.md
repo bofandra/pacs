@@ -16,7 +16,7 @@
 | Duplicate and corruption handling | UID collision reject + storage checksum | Unit tests + synthetic UID collision passed; concurrency tests required |
 | AE registry | PostgreSQL CRUD (protected HTTP API) | Synthetic HTTP/PostgreSQL integration passed |
 | C-FIND/C-MOVE/C-GET SCU | Native addon adapter to allowlisted registered AE | DICOM simulator tests required |
-| C-FIND/C-MOVE/C-GET SCP | **NOT IMPLEMENTED** | Design + native adapter required |
+| Study Root C-FIND SCP | Experimental PostgreSQL-backed STUDY/SERIES/IMAGE matching with AE allowlist | Integration tests required (not a conformance claim) |\n| C-MOVE/C-GET SCP | **NOT IMPLEMENTED** — presentation contexts rejected | Must implement correct C-STORE sub-operations and role negotiation |
 | DICOM Modality Worklist SCP | **NOT IMPLEMENTED** | Native MWL support not available in selected addon |
 | DICOM routing | Automatic per-modality routing rules, persistent jobs, retries, dead-letter, audit, optional native C-STORE SCU worker | Synthetic PostgreSQL/worker integration passed; no network peer validation |
 | Backup/restore, TLS, RBAC, consent | **NOT IMPLEMENTED** | Needed before clinical use |

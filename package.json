@@ -13,13 +13,15 @@
     "worker": "node src/inbox-worker.js",
     "dimse:scp": "node src/dimse-scp.js",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/server.js && node --check src/catalog.js && node --check src/dicom.js && node --check src/dimse.js && node --check src/inbox-worker.js && node --check src/routing.js && node --check src/delivery-worker.js && node --check src/delivery-transport.js && node --check src/native-store-child.js && node --check src/migrate.js",
-    "delivery:worker": "node src/delivery-worker.js"
+    "check": "node --check src/server.js && node --check src/catalog.js && node --check src/dicom.js && node --check src/dimse.js && node --check src/inbox-worker.js && node --check src/routing.js && node --check src/delivery-worker.js && node --check src/delivery-transport.js && node --check src/native-store-child.js && node --check src/migrate.js && node --check src/find-query.js && node --check src/find-scp.js",
+    "delivery:worker": "node src/delivery-worker.js",
+    "dimse:find-scp": "node src/find-scp.js"
   },
   "dependencies": {
     "dicom-parser": "^1.8.21",
     "fastify": "^5.6.0",
-    "pg": "^8.16.3"
+    "pg": "^8.16.3",
+    "dcmjs-dimse": "^0.3.4"
   },
   "optionalDependencies": {
     "dicom-dimse-native": "^2.6.1"

@@ -6,6 +6,9 @@ import path from 'node:path';
 import { config } from '../src/config.js';
 import { PacsCatalog } from '../src/catalog.js';
 import { processDeliveryJob } from '../src/delivery-worker.js';
+import { once } from 'node:events';
+import dimsePackage from 'dcmjs-dimse';
+import { startFindScp } from '../src/find-scp.js';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
 import {buildDicomMultipart} from '../src/multipart.js';
@@ -213,6 +216,60 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
       assert.equal(enableAe.status,200);
       assert.equal((await processDeliveryJob(catalog,async()=>{})).status,'succeeded');
     } finally {await catalog.close();}
+    // Real DIMSE association and C-FIND against the same PostgreSQL catalog.
+    // This is a synthetic-data library client test, not yet independent DCMTK certification.
+    process.env.PACS_FIND_EXPERIMENTAL='1';
+    process.env.PACS_FIND_PORT='32190';
+    const findService=await startFindScp();
+    try {
+      if(!findService.server.server.listening) await once(findService.server,'listening');
+      const { Client, requests, constants }=dimsePackage;
+      const findOverWire=(kind,keys,callingAet='SIMULATOR')=>new Promise((resolve,reject)=>{
+        let complete=false;
+        const matches=[];
+        const client=new Client();
+        const ctor=kind==='STUDY'?'createStudyFindRequest':kind==='SERIES'
+          ?'createSeriesFindRequest':'createImageFindRequest';
+        const rq=requests.CFindRequest[ctor](keys);
+        const timeout=setTimeout(()=>finish(new Error('C-FIND SCP timed out')),9000);
+        function finish(error,value) {
+          if(complete) return;
+          complete=true;clearTimeout(timeout);
+          if(error) reject(error);else resolve(value);
+        }
+        rq.on('response',response=>{
+          const code=response.getStatus();
+          if(code===constants.Status.Pending && response.hasDataset())
+            matches.push(response.getDataset().getElements());
+          else if(code===constants.Status.Success) finish(null,matches);
+          else if(code!==constants.Status.Pending)
+            finish(new Error('C-FIND failed with status '+code));
+        });
+        client.on('networkError',()=>finish(new Error('DIMSE network error')));
+        client.on('associationRejected',()=>finish(new Error('DIMSE association rejected')));
+        client.on('closed',()=>{if(!complete) finish(new Error('Association closed before completion'));});
+        client.addRequest(rq);
+        client.send('127.0.0.1',32190,callingAet,'PACS_NATIVE');
+      });
+      const foundStudy=await findOverWire('STUDY',{StudyInstanceUID:ids.study});
+      assert.equal(foundStudy.length,1);
+      assert.equal(foundStudy[0].StudyInstanceUID,ids.study);
+      assert.equal(foundStudy[0].PatientID,'SYNTHETIC-001');
+      const foundSeries=await findOverWire('SERIES',{StudyInstanceUID:ids.study});
+      assert.equal(foundSeries.length,1);
+      assert.equal(foundSeries[0].SeriesInstanceUID,ids.series);
+      const foundImage=await findOverWire('IMAGE',{StudyInstanceUID:ids.study,SeriesInstanceUID:ids.series});
+      assert.equal(foundImage.length,1);
+      assert.equal(foundImage[0].SOPInstanceUID,ids.instance);
+      await assert.rejects(
+        findOverWire('STUDY',{StudyInstanceUID:ids.study},'UNKNOWN_AET'),
+        /rejected|closed|network/i
+      );
+    } finally {
+      await findService.close();
+      delete process.env.PACS_FIND_EXPERIMENTAL;
+      delete process.env.PACS_FIND_PORT;
+    }
     assert.equal((await fetch(base+'/dicomweb/studies')).status,401);
   } finally {
     server.kill('SIGTERM');
