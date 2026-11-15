@@ -9,7 +9,9 @@ import { processDeliveryJob } from '../src/delivery-worker.js';
 import { once } from 'node:events';
 import dimsePackage from 'dcmjs-dimse';
 import { startFindScp } from '../src/find-scp.js';
-import {spawn} from 'node:child_process';
+import {spawn,execFile as execFileCallback} from 'node:child_process';
+import {promisify} from 'node:util';
+const execFile=promisify(execFileCallback);
 import {setTimeout as delay} from 'node:timers/promises';
 import {buildDicomMultipart} from '../src/multipart.js';
 import {parseDicom} from '../src/dicom.js';
@@ -261,6 +263,20 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
       const foundImage=await findOverWire('IMAGE',{StudyInstanceUID:ids.study,SeriesInstanceUID:ids.series});
       assert.equal(foundImage.length,1);
       assert.equal(foundImage[0].SOPInstanceUID,ids.instance);
+      if(process.env.PACS_DCMTK==='1') {
+        // Independent implementation of DICOM Study Root C-FIND over TCP.
+        const dcmtk=await execFile('findscu',[
+          '-S','-v','+sr',
+          '-aet','SIMULATOR','-aec','PACS_NATIVE',
+          '-k','QueryRetrieveLevel=STUDY',
+          '-k','StudyInstanceUID='+ids.study,
+          '-k','PatientID',
+          '127.0.0.1','32190'
+        ],{timeout:10000,maxBuffer:1048576});
+        const output=dcmtk.stdout+dcmtk.stderr;
+        assert.ok(output.includes(ids.study),'DCMTK findscu must return the queried study');
+        assert.ok(output.includes('SYNTHETIC-001'),'DCMTK response must include PatientID');
+      }
       await assert.rejects(
         findOverWire('STUDY',{StudyInstanceUID:ids.study},'UNKNOWN_AET'),
         /rejected|closed|network/i
