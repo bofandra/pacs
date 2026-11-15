@@ -7,6 +7,7 @@ import { parseDicomMultipart, buildDicomMultipart } from './multipart.js';
 import { runDimse } from './dimse.js';
 import { listRules,addRule,setRuleEnabled,enqueueManual,listJobs,retryJob } from './routing.js';
 import {createWorklistOrder,listWorklistOrders,getWorklistOrder,changeWorklistOrderStatus} from './mwl-orders.js';
+import {reconcileWorklistOrder} from './mwl-reconcile.js';
 
 const conf=config();
 if (!conf.token || conf.token.length<20) throw new Error('Set API_TOKEN (>=20 chars) before starting HTTP API');
@@ -106,6 +107,9 @@ app.post('/api/v1/ris/worklist-orders',async(req,reply)=>{
 app.get('/api/v1/ris/worklist-orders',async(req)=>listWorklistOrders(db.pool,req.query??{}));
 app.get('/api/v1/ris/worklist-orders/:id',async(req)=>{
   return getWorklistOrder(db.pool,Number(req.params.id));
+});
+app.get('/api/v1/ris/worklist-orders/:id/reconciliation',async(req)=>{
+  return reconcileWorklistOrder(db.pool,Number(req.params.id));
 });
 app.patch('/api/v1/ris/worklist-orders/:id/status',async(req)=>{
   return changeWorklistOrderStatus(db.pool,Number(req.params.id),req.body?.status);

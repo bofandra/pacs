@@ -5,6 +5,7 @@ import {promisify} from 'node:util';
 import {once} from 'node:events';
 import {setTimeout as delay} from 'node:timers/promises';
 import {startMwlScp} from '../src/mwl-scp.js';
+import {buildDicomMultipart} from '../src/multipart.js';
 
 const execFile=promisify(execFileCallback);
 const enabled=process.env.PACS_INTEGRATION==='1'&&process.env.PACS_DCMTK==='1';
@@ -30,6 +31,43 @@ function syntheticOrder(index,issuer,modality='CT') {
    scheduleTimezone:'Asia/Jakarta'
  };
 }
+// Synthetic Part 10 only. Study/Patient/Accession fields mirror a RIS worklist order.
+function field(group,element,vr,value) {
+  const long=['OB','OW','SQ','UN','UT'].includes(vr);
+  let data=Buffer.isBuffer(value)?value:Buffer.from(String(value),'ascii');
+  if(data.length%2)data=Buffer.concat([data,Buffer.from([vr==='UI'?0:32])]);
+  const header=Buffer.alloc(long?12:8);
+  header.writeUInt16LE(group,0);header.writeUInt16LE(element,2);header.write(vr,4,'ascii');
+  if(long)header.writeUInt32LE(data.length,8);
+  else header.writeUInt16LE(data.length,6);
+  return Buffer.concat([header,data]);
+}
+function syntheticStudy(order,instanceSuffix,issuer=order.issuerOfPatientId) {
+  const sopClass='1.2.840.10008.5.1.4.1.1.2';
+  const sopInstance='2.25.654321'+instanceSuffix;
+  const series='2.25.789321'+instanceSuffix;
+  const meta=Buffer.concat([
+    field(2,1,'OB',Buffer.from([0,1])),
+    field(2,2,'UI',sopClass),field(2,3,'UI',sopInstance),
+    field(2,0x10,'UI','1.2.840.10008.1.2.1'),field(2,0x12,'UI','2.25.1')
+  ]);
+  const length=Buffer.alloc(4);length.writeUInt32LE(meta.length);
+  return Buffer.concat([
+    Buffer.alloc(128),Buffer.from('DICM'),
+    field(2,0,'UL',length),meta,
+    field(8,0x16,'UI',sopClass),field(8,0x18,'UI',sopInstance),
+    field(8,0x20,'DA',order.scheduledStartDate),
+    field(8,0x50,'SH',order.accessionNumber),
+    field(8,0x60,'CS',order.modality),
+    field(0x10,0x10,'PN',order.patientName),
+    field(0x10,0x20,'LO',order.patientId),
+    field(0x10,0x21,'LO',issuer),
+    field(0x20,0x0d,'UI',order.studyInstanceUID),
+    field(0x20,0x0e,'UI',series),
+    field(0x7fe0,0x10,'OW',Buffer.from([0,0]))
+  ]);
+}
+
 test('RIS scheduling API to DICOM MWL C-FIND, identifier issuer and cancellation',
   {skip:!enabled,timeout:35000},async()=>{
  const server=spawn(process.execPath,['src/server.js'],{
@@ -112,6 +150,33 @@ test('RIS scheduling API to DICOM MWL C-FIND, identifier issuer and cancellation
    assert.ok(!resultB.includes(primary.accessionNumber));
    const noMr=await query(['(0040,0100)[0].Modality=MR','AccessionNumber']);
    assert.ok(!noMr.includes(cancelled.accessionNumber));
+
+   // RIS order -> worklist -> synthetic DICOM ingest -> explicit reconciliation.
+   const before=(await api('/api/v1/ris/worklist-orders/'+created.data.order.id+'/reconciliation')).data;
+   assert.equal(before.status,'not_received');
+   async function stow(bytes,boundary){
+     const multipart=buildDicomMultipart(bytes,boundary);
+     const res=await fetch(base+'/dicomweb/studies',{
+       method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':multipart.type},
+       body:multipart.data
+     });
+     return res.status;
+   }
+   assert.equal(await stow(syntheticStudy(primary,101),'mwl-image-101'),200);
+   const reconciled=(await api('/api/v1/ris/worklist-orders/'+created.data.order.id+'/reconciliation')).data;
+   assert.equal(reconciled.status,'identity_consistent');
+   assert.equal(reconciled.issuerOfPatientIdMatches,true);
+   assert.equal(reconciled.accessionIssuerVerified,false,'Accession issuer is NOT inferred from a bare number');
+   assert.equal(reconciled.automaticPatientMerge,false);
+
+   // Same PatientID but WRONG issuer must remain an explicit mismatch.
+   assert.equal(await stow(syntheticStudy(second,102,'ISSUER_A'),'mwl-image-102'),200);
+   const secondId=(await api('/api/v1/ris/worklist-orders?stationAet=MWL_TEST_AE')).data
+     .find(x=>x.accession_number===second.accessionNumber).id;
+   const mismatch=(await api('/api/v1/ris/worklist-orders/'+secondId+'/reconciliation')).data;
+   assert.equal(mismatch.status,'mismatch');
+   assert.equal(mismatch.patientIdMatches,true);
+   assert.equal(mismatch.issuerOfPatientIdMatches,false);
  } finally {
    if(mwl)await mwl.close();
    delete process.env.PACS_MWL_EXPERIMENTAL;
