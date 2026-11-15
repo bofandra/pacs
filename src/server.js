@@ -5,6 +5,7 @@ import { PacsCatalog } from './catalog.js';
 import { element, validUID, withBulkDataUri } from './dicom.js';
 import { parseDicomMultipart, buildDicomMultipart } from './multipart.js';
 import { runDimse } from './dimse.js';
+import { listRules,addRule,setRuleEnabled,enqueueManual,listJobs,retryJob } from './routing.js';
 
 const conf=config();
 if (!conf.token || conf.token.length<20) throw new Error('Set API_TOKEN (>=20 chars) before starting HTTP API');
@@ -102,6 +103,27 @@ app.post('/api/v1/dimse/:operation',async(req)=>{
   if(!['find','move','get'].includes(mode)) throw Object.assign(new Error('Unsupported DIMSE operation'),{statusCode:404});
   if(!req.body || typeof req.body.aet!=='string') throw Object.assign(new Error('aet and studyUID are required'),{statusCode:400});
   return runDimse(db,mode,req.body);
+});
+// P1 delivery rules are disabled until explicitly enabled by the operator.
+app.get('/api/v1/routing/rules',async()=>listRules(db.pool));
+app.post('/api/v1/routing/rules',async(req,reply)=>{
+  const rule=await addRule(db.pool,req.body);
+  return reply.code(201).send(rule);
+});
+app.patch('/api/v1/routing/rules/:id',async(req)=>{
+  const value=Number(req.params.id);
+  return setRuleEnabled(db.pool,value,req.body?.enabled);
+});
+app.get('/api/v1/delivery/jobs',async(req)=>listJobs(db.pool,req.query));
+app.post('/api/v1/delivery/jobs',async(req,reply)=>{
+  const job=await enqueueManual(db.pool,req.body??{});
+  return reply.code(202).send(job);
+});
+app.post('/api/v1/delivery/jobs/:id/retry',async(req)=>{
+  return retryJob(db.pool,Number(req.params.id));
+});
+app.get('/api/v1/delivery/stats',async()=>{
+  return (await db.pool.query('SELECT status,count(*)::int AS count FROM delivery_jobs GROUP BY status ORDER BY status')).rows;
 });
 app.get('/api/v1/audit',async(req)=>{
   const limit=Math.min(Math.max(Number(req.query.limit)||50,1),100);

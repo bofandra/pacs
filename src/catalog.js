@@ -1,6 +1,7 @@
 import pg from 'pg';
 import { parseDicom } from './dicom.js';
 import { storeObject, sha256, readObject } from './storage.js';
+import { enqueueRoutesForIngest } from './routing.js';
 
 export class PacsCatalog {
   constructor(conf) {
@@ -48,6 +49,7 @@ export class PacsCatalog {
         if (!raced.rowCount || raced.rows[0].sha256 !== digest)
           throw Object.assign(new Error('SOP Instance UID collision'), { statusCode: 409 });
       }
+      if (inserted.rowCount) await enqueueRoutesForIngest(c,parsed);
       await c.query('INSERT INTO audit_events(event_type,reference_uid,details) VALUES($1,$2,$3)',
         ['instance_ingest', parsed.instanceUID, JSON.stringify({ digest, source: 'dicom_ingress' })]);
       await c.query('COMMIT');

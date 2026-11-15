@@ -4,14 +4,17 @@
   "private": true,
   "type": "module",
   "description": "Native Node.js PACS prototype: DIMSE ingress, DICOMweb and PostgreSQL catalog",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "node src/server.js",
     "migrate": "node src/migrate.js",
     "worker": "node src/inbox-worker.js",
     "dimse:scp": "node src/dimse-scp.js",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/server.js && node --check src/catalog.js && node --check src/dicom.js && node --check src/dimse.js && node --check src/inbox-worker.js"
+    "check": "node --check src/server.js && node --check src/catalog.js && node --check src/dicom.js && node --check src/dimse.js && node --check src/inbox-worker.js && node --check src/routing.js && node --check src/delivery-worker.js && node --check src/delivery-transport.js && node --check src/native-store-child.js && node --check src/migrate.js",
+    "delivery:worker": "node src/delivery-worker.js"
   },
   "dependencies": {
     "dicom-parser": "^1.8.21",

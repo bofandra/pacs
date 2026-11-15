@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { config } from '../src/config.js';
+import { PacsCatalog } from '../src/catalog.js';
+import { processDeliveryJob } from '../src/delivery-worker.js';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
 import {buildDicomMultipart} from '../src/multipart.js';
@@ -106,6 +111,80 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     assert.equal(ae.status,200);
     const nodes=await (await request('/api/v1/aes')).json();
     assert.ok(nodes.some(x=>x.aet==='SIMULATOR'));
+    // Route creation is deliberately disabled by default.
+    const routeCreate=await request('/api/v1/routing/rules',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({destinationAet:'SIMULATOR',modality:'CR'})});
+    assert.equal(routeCreate.status,201);
+    const rule=await routeCreate.json();
+    assert.equal(rule.enabled,false);
+    const ruleEnable=await request('/api/v1/routing/rules/'+rule.id,{
+      method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:true})});
+    assert.equal(ruleEnable.status,200);
+    assert.equal((await ruleEnable.json()).enabled,true);
+    const catalog=new PacsCatalog(config());
+    try {
+      const routed={study:uid(),series:uid(),instance:uid()};
+      const routedBytes=makeSyntheticDicom(routed);
+      const routedPart=buildDicomMultipart(routedBytes,'routed-test-boundary');
+      const ingestRouted=()=>request('/dicomweb/studies',{
+        method:'POST',headers:{'Content-Type':routedPart.type},body:routedPart.data});
+      assert.equal((await ingestRouted()).status,200);
+      const queued=await (await request('/api/v1/delivery/jobs?status=queued')).json();
+      assert.ok(queued.some(job=>job.instance_uid===routed.instance&&job.destination_aet==='SIMULATOR'));
+      const completed=await processDeliveryJob(catalog,async ({sourcePath,node})=>{
+        assert.equal(node.aet,'SIMULATOR');
+        assert.deepEqual(await fs.readFile(path.join(sourcePath,'instance.dcm')),routedBytes);
+      });
+      assert.equal(completed.status,'succeeded');
+      const oldJob=(await (await request('/api/v1/delivery/jobs')).json())
+        .find(job=>job.instance_uid===routed.instance);
+      assert.equal(oldJob.status,'succeeded');
+      assert.equal((await ingestRouted()).status,200);
+      const afterDuplicate=(await (await request('/api/v1/delivery/jobs')).json())
+        .filter(job=>job.instance_uid===routed.instance);
+      assert.equal(afterDuplicate.length,1,'duplicated DICOM must not enqueue another delivery');
+
+      // Failure causes persistent retry; simulate the backoff expiring in CI.
+      const needsRetry={study:uid(),series:uid(),instance:uid()};
+      const retryPart=buildDicomMultipart(makeSyntheticDicom(needsRetry),'retry-boundary');
+      assert.equal((await request('/dicomweb/studies',{
+        method:'POST',headers:{'Content-Type':retryPart.type},body:retryPart.data})).status,200);
+      const failed=await processDeliveryJob(catalog,async ()=>{
+        throw Object.assign(new Error('synthetic network failure'),{code:'DIMSE_ASSOCIATION_FAILED'});
+      });
+      assert.equal(failed.status,'queued');
+      const waitJob=(await (await request('/api/v1/delivery/jobs')).json())
+        .find(job=>job.instance_uid===needsRetry.instance);
+      assert.equal(waitJob.error_code,'DIMSE_ASSOCIATION_FAILED');
+      assert.equal(waitJob.attempts,1);
+      assert.ok(new Date(waitJob.next_attempt_at).getTime()>Date.now()-1000);
+      await catalog.pool.query('UPDATE delivery_jobs SET next_attempt_at=now() WHERE id=$1',[waitJob.id]);
+      const retried=await processDeliveryJob(catalog,async()=>{});
+      assert.equal(retried.status,'succeeded');
+      const succeeded=(await (await request('/api/v1/delivery/jobs')).json())
+        .find(job=>job.instance_uid===needsRetry.instance);
+      assert.equal(succeeded.attempts,2);
+
+      const dead={study:uid(),series:uid(),instance:uid()};
+      const deadPart=buildDicomMultipart(makeSyntheticDicom(dead),'dead-letter-boundary');
+      assert.equal((await request('/dicomweb/studies',{
+        method:'POST',headers:{'Content-Type':deadPart.type},body:deadPart.data})).status,200);
+      const deadJob=(await (await request('/api/v1/delivery/jobs')).json())
+        .find(job=>job.instance_uid===dead.instance);
+      await catalog.pool.query('UPDATE delivery_jobs SET max_attempts=1 WHERE id=$1',[deadJob.id]);
+      assert.equal((await processDeliveryJob(catalog,async()=>{throw new Error('simulated failure')})).status,'dead_letter');
+      const revived=await request('/api/v1/delivery/jobs/'+deadJob.id+'/retry',{method:'POST'});
+      assert.equal(revived.status,200);
+      assert.equal((await revived.json()).status,'queued');
+      assert.equal((await processDeliveryJob(catalog,async()=>{})).status,'succeeded');
+      const stats=await (await request('/api/v1/delivery/stats')).json();
+      assert.ok(stats.some(x=>x.status==='succeeded'&&x.count>=3));
+
+      const ruleDisable=await request('/api/v1/routing/rules/'+rule.id,{
+        method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})});
+      assert.equal(ruleDisable.status,200);
+    } finally {await catalog.close();}
     assert.equal((await fetch(base+'/dicomweb/studies')).status,401);
   } finally {
     server.kill('SIGTERM');
