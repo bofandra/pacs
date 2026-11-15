@@ -14,15 +14,30 @@ export async function storeObject(root, bytes) {
   const digest = sha256(bytes);
   const dest = objectPath(root, digest);
   await fs.mkdir(path.dirname(dest), { recursive: true });
+  // Never expose a partially-written content-addressed object. Link only after fsync.
+  const tmp = dest + '.' + crypto.randomBytes(12).toString('hex') + '.tmp';
+  let linked = false;
   try {
-    await fs.writeFile(dest, bytes, { flag: 'wx', mode: 0o600 });
-    // Flush file contents before declaring storage durable (filesystem durability depends on mount).
-    const handle = await fs.open(dest, 'r');
-    try { await handle.sync(); } finally { await handle.close(); }
-  } catch (err) {
-    if (err.code !== 'EEXIST') throw err;
-    const existing = await fs.readFile(dest);
-    if (sha256(existing) !== digest) throw new Error('Stored object checksum mismatch');
+    const handle = await fs.open(tmp, 'wx', 0o600);
+    try {
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally { await handle.close(); }
+    try {
+      await fs.link(tmp, dest); // atomic, no overwrite if another writer won
+      linked = true;
+    } catch(err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+    if (!linked) {
+      const existing = await fs.readFile(dest);
+      if (sha256(existing) !== digest) throw new Error('Stored object checksum mismatch');
+    }
+    // Make directory entry durable where supported by the underlying filesystem.
+    const dirHandle = await fs.open(path.dirname(dest), 'r');
+    try { await dirHandle.sync(); } finally { await dirHandle.close(); }
+  } finally {
+    await fs.unlink(tmp).catch(err => { if(err.code !== 'ENOENT') throw err; });
   }
   return { sha256: digest, bytes: bytes.length };
 }

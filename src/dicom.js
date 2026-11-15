@@ -62,13 +62,8 @@ export function parseDicom(buffer) {
     metadata: meta
   };
 }
-export function withBulkDataUri(metadata, baseUrl, studyUID, seriesUID, instanceUID) {
-  const copy = structuredClone(metadata);
-  if (copy['00280010'] && copy['00280011']) {
-    copy['7FE00010'] = {
-      vr: 'OB',
-      BulkDataURI: `${baseUrl}/studies/${encodeURIComponent(studyUID)}/series/${encodeURIComponent(seriesUID)}/instances/${encodeURIComponent(instanceUID)}/bulkdata/7fe00010`
-    };
-  }
-  return copy;
+// Metadata currently includes a selected subset of attributes only.
+// Do not advertise a BulkDataURI until frame / pixel retrieval is implemented.
+export function withBulkDataUri(metadata) {
+  return structuredClone(metadata);
 }

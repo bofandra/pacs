@@ -30,9 +30,16 @@ export class PacsCatalog {
       await c.query(`INSERT INTO studies(study_uid,patient_id,patient_name,accession_number,study_date,study_description)
         VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (study_uid) DO NOTHING`,
         [parsed.studyUID, parsed.patientId, parsed.patientName, parsed.accession, parsed.studyDate, parsed.studyDescription]);
+      // Re-check after conflict resolution: concurrent ingesters may race on new UIDs.
+      const committedStudy = await c.query('SELECT patient_id FROM studies WHERE study_uid=$1',[parsed.studyUID]);
+      if (committedStudy.rows[0]?.patient_id !== parsed.patientId)
+        throw Object.assign(new Error('Conflicting patient for study UID'), {statusCode:409});
       await c.query(`INSERT INTO series(series_uid,study_uid,modality,series_number) VALUES($1,$2,$3,$4)
         ON CONFLICT (series_uid) DO NOTHING`,
         [parsed.seriesUID, parsed.studyUID, parsed.modality, parsed.seriesNumber]);
+      const committedSeries = await c.query('SELECT study_uid FROM series WHERE series_uid=$1',[parsed.seriesUID]);
+      if (committedSeries.rows[0]?.study_uid !== parsed.studyUID)
+        throw Object.assign(new Error('Conflicting parent study for series UID'), {statusCode:409});
       const inserted = await c.query(`INSERT INTO instances(instance_uid,series_uid,study_uid,sop_class_uid,transfer_syntax_uid,sha256,size_bytes,metadata)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (instance_uid) DO NOTHING RETURNING instance_uid`,
         [parsed.instanceUID, parsed.seriesUID, parsed.studyUID, parsed.sopClassUID, parsed.transferSyntax, digest, bytes.length, parsed.metadata]);
