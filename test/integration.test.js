@@ -229,6 +229,7 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     assert.equal(aeDest.status,200);
     process.env.PACS_FIND_EXPERIMENTAL='1';
     process.env.PACS_MOVE_EXPERIMENTAL='1';
+    process.env.PACS_GET_EXPERIMENTAL='1';
     process.env.PACS_FIND_PORT='32190';
     const findService=await startFindScp();
     try {
@@ -333,6 +334,35 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
           if(storeScp.exitCode===null)storeScp.kill('SIGKILL');
         }
       }
+      if(process.env.PACS_DCMTK==='1') {
+        // Independent DCMTK getscu uses ONE association for C-GET and C-STORE.
+        const getRoot=await fs.mkdtemp(path.join(os.tmpdir(),'pacs-getscu-'));
+        try {
+          const retrieved=await execFile('getscu',[
+            '-S','-v','-aet','SIMULATOR','-aec','PACS_NATIVE',
+            '-od',getRoot,
+            '-k','QueryRetrieveLevel=STUDY','-k','StudyInstanceUID='+ids.study,
+            '127.0.0.1','32190'
+          ],{timeout:30000,maxBuffer:2500000});
+          const output=retrieved.stdout+retrieved.stderr;
+          assert.match(output,/Success|0x0000/i,'C-GET must succeed');
+          let files=[];
+          for(let n=0;n<40;n++){
+            files=await fs.readdir(getRoot,{recursive:true});
+            if(files.length)break;
+            await delay(100);
+          }
+          const candidateFiles=[];
+          for(const name of files){
+            const full=path.join(getRoot,name);
+            if((await fs.stat(full)).isFile())candidateFiles.push(full);
+          }
+          assert.ok(candidateFiles.length>0,'DCMTK getscu should save a DICOM object');
+          const instances=await Promise.all(candidateFiles.map(async p=>parseDicom(await fs.readFile(p))));
+          assert.ok(instances.some(x=>x.instanceUID===ids.instance),
+            'C-GET must return the correct SOP Instance UID');
+        } finally {await fs.rm(getRoot,{recursive:true,force:true});}
+      }
       await assert.rejects(
         findOverWire('STUDY',{StudyInstanceUID:ids.study},'UNKNOWN_AET'),
         /rejected|closed|network/i
@@ -341,6 +371,7 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
       await findService.close();
       delete process.env.PACS_FIND_EXPERIMENTAL;
       delete process.env.PACS_MOVE_EXPERIMENTAL;
+      delete process.env.PACS_GET_EXPERIMENTAL;
       delete process.env.PACS_FIND_PORT;
       await fs.rm(outputRoot,{recursive:true,force:true});
     }
