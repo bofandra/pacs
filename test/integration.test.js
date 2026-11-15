@@ -5,7 +5,6 @@ import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
 import {buildDicomMultipart} from '../src/multipart.js';
 import {parseDicom} from '../src/dicom.js';
-import dicomParser from 'dicom-parser';
 
 const enabled=process.env.PACS_INTEGRATION === '1';
 const uid = () => '2.25.' + BigInt('0x'+crypto.randomBytes(16).toString('hex')).toString(10);
@@ -54,11 +53,7 @@ function makeSyntheticDicom(ids){
 }
 test('synthetic Part 10 DICOM parsing',()=>{
   const ids={study:uid(),series:uid(),instance:uid()};
-  const raw=makeSyntheticDicom(ids);
-  const ds=dicomParser.parseDicom(new Uint8Array(raw),{untilTag:'x7fe00010'});
-  const uidTags=['x0020000d','x0020000e','x00080018','x00080016'];
-  console.log('SYNTHETIC UID PROBE',uidTags.map(tag=>({tag,value:ds.string(tag),length:ds.elements[tag]?.length})));
-  const parsed=parseDicom(raw);
+  const parsed=parseDicom(makeSyntheticDicom(ids));
   assert.equal(parsed.studyUID,ids.study);
   assert.equal(parsed.instanceUID,ids.instance);
   assert.equal(parsed.patientId,'SYNTHETIC-001');
