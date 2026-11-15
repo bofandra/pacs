@@ -4,15 +4,16 @@
 
 | Capability | Implementation in this branch | Verification |
 | --- | --- | --- |
-| C-ECHO SCP | Native addon startStoreScp listener configured | Integration test required |
-| C-STORE SCP | Native addon writes incoming instances to inbox | Integration test required |
+| C-ECHO SCP | Experimental JavaScript DIMSE listener plus older native addon listener | DCMTK echoscu success for JavaScript listener; native addon not tested |
+| C-STORE SCP | Experimental JavaScript listener validates SOP identity, persists and indexes reconstructed DICOM Part 10 before success; native inbox adapter remains | DCMTK storescu success, duplicate handling, UID collision rejection, unauthorized caller rejection tested; native addon inbox not tested |
 | Metadata indexing | PostgreSQL schema + inbox ingestion | Synthetic STOW indexing CI passed; DIMSE inbox still unverified |
 | Immutable storage + SHA-256 | Content-addressed filesystem files | Unit tests supplied |
 | QIDO-RS studies/series/instances | Query endpoints | Synthetic HTTP/PostgreSQL integration passed; conformance tests required |
 | WADO-RS instance retrieval | multipart/related full DICOM instance | Synthetic byte-for-byte retrieval CI passed; client tests required |
-| WADO-RS metadata | Selected attributes (subset) | Not yet viewer-conformant |
+| WADO-RS frames / bulkdata | Raw uncompressed 8/16-bit LE frames and PixelData multipart retrieval | Synthetic one- and two-frame network integration passed; compressed not supported |
+| WADO-RS metadata | Dynamic DICOM JSON metadata with PixelData BulkDataURI (limited supported tags) | Synthetic single-/two-frame metadata tested; not OHIF runtime-validated |
 | STOW-RS | multipart/related application/dicom | Synthetic multipart ingest CI passed; partial STOW status semantics |
-| OHIF rendering | **NOT IMPLEMENTED / NOT VERIFIED** | Requires complete metadata/frames and viewer config |
+| OHIF rendering | Proposed same-origin data source config; uncompressed WADO frame endpoints | OHIF runtime not integrated or rendering-verified |
 | Duplicate and corruption handling | UID collision reject + storage checksum | Unit tests + synthetic UID collision passed; concurrency tests required |
 | AE registry | PostgreSQL CRUD (protected HTTP API) | Synthetic HTTP/PostgreSQL integration passed |
 | C-FIND/C-MOVE/C-GET SCU | Native addon adapter to allowlisted registered AE | DICOM simulator tests required |
@@ -68,6 +69,16 @@
 - This is a subset, not complete DICOM MWL K.6 conformance. No detailed timezone range semantics across dates, code sequences, HIS authorization scopes, HL7 Order messages, N-SET performed procedure steps, or production transport/security.
 - CI evidence: https://github.com/bofandra/pacs/actions/runs/43705016109 (25/25 tests). See [docs/MWL_SCP.md](MWL_SCP.md).
 
+## C-STORE ingress and WADO-RS viewer foundation (15 Nov 2026)
+
+- New experimental JavaScript C-ECHO/C-STORE SCP, enabled explicitly via `PACS_STORE_EXPERIMENTAL=1`, listens on 127.0.0.1 and requires registered calling AE. This is **an alternative** to the older native-addon SCP on the same port, not a replacement of its runtime behavior.
+- DCMTK `echoscu` and `storescu` accepted a synthetic CR image. C-STORE Success is sent **after** content-addressed persistence, SHA-256 verification and PostgreSQL indexing. A repeated instance is idempotent; changed payload for the same SOP Instance UID receives a non-success response; unregistered AE is rejected.
+- DIMSE C-STORE carries a DICOM dataset, not a Part 10 file. The listener reconstructs a Part 10 file in the negotiated Implicit/Explicit VR Little Endian syntax; **wire-byte identity is not claimed**.
+- WADO-RS metadata now exposes selected geometry/pixel attributes and a PixelData `BulkDataURI`. Dedicated endpoints retrieve uncompressed frames (one or multiple) and raw PixelData via multipart/related; 8/16-bit LE only.
+- A proposed OHIF same-origin config template exists. It **requires an authenticated reverse proxy** and has **not been validated with OHIF running**. Never embed shared API tokens in browser config.
+- Verified CI: [C-STORE inbound](https://github.com/bofandra/pacs/actions/runs/43712456701) and [WADO uncompressed frames](https://github.com/bofandra/pacs/actions/runs/43712986915), both 26/26 tests.
+- Read [STORE_SCP.md](STORE_SCP.md) and [WADO_OHIF.md](WADO_OHIF.md).
+
 ## Verified automated evidence
 
 - GitHub Actions initial core: https://github.com/bofandra/pacs/actions/runs/43686423562 (commit a6a41a81)
@@ -76,9 +87,11 @@
 - GitHub Actions C-MOVE SCP + DCMTK storescp: https://github.com/bofandra/pacs/actions/runs/43697401682 (commit 38b861ef, 17/17 tests passed)
 - GitHub Actions C-GET SCP + DCMTK getscu: https://github.com/bofandra/pacs/actions/runs/43700540176 (commit 0519b7f7, 21/21 tests passed including two-instance retrieval)
 - GitHub Actions MWL C-FIND + RIS API + explicit reconciliation: https://github.com/bofandra/pacs/actions/runs/43705016109 (commit 2958e1e2, 25/25 tests passed)
+- GitHub Actions C-ECHO/C-STORE inbound: https://github.com/bofandra/pacs/actions/runs/43712456701 (commit fe828b0d, 26/26 tests passed)
+- GitHub Actions uncompressed WADO-RS frames and bulkdata: https://github.com/bofandra/pacs/actions/runs/43712986915 (commit 6efdfccd, 26/26 tests passed)
 - Node.js syntax check, unit tests, PostgreSQL migration, synthetic Part 10 DICOM parsing, HTTP STOW/QIDO/WADO roundtrip, checksum, duplicate/UID collision rejection and AE registry passed.
 - Routing CI validates atomic queueing, a mock-send worker, retry/backoff, dead-letter and replay. The native network transfer is **not** covered by CI.
-- **Not verified:** C-STORE/C-ECHO native *ingress* listener from a simulator; C-FIND/MOVE/GET SCU native adapter with external peers; MWL with actual radiology modalities or complete DICOM K.6 matching; OHIF; clinical rendering. C-FIND, C-MOVE and C-GET SCP are only verified with limited synthetic cases.
+- **Not verified:** Legacy native-addon C-STORE inbox from simulator; C-FIND/MOVE/GET SCU native adapter with external peers; MWL with actual modalities or full DICOM K.6; OHIF runtime/clinical rendering; compressed frames. JavaScript C-ECHO/C-STORE ingress is verified only with DCMTK synthetic data. C-FIND, C-MOVE and C-GET SCP are only verified with limited synthetic cases.
 
 Backlog: [DIMSE SCP](https://github.com/bofandra/pacs/issues/2), [MWL](https://github.com/bofandra/pacs/issues/3), [routing](https://github.com/bofandra/pacs/issues/4), [OHIF](https://github.com/bofandra/pacs/issues/5).
 

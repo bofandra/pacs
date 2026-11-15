@@ -17,11 +17,14 @@ node --env-file=.env src/migrate.js
 node --env-file=.env src/server.js
 ```
 
-In separate shells, for DIMSE C-STORE inbox and indexing:
+In separate shells, for the legacy native DIMSE C-STORE inbox (not network-verified) and indexing:
 
 ```bash
 node --env-file=.env src/inbox-worker.js
 node --env-file=.env src/dimse-scp.js
+
+# Alternative validated C-ECHO/C-STORE listener (do NOT start both on port 11112):
+PACS_STORE_EXPERIMENTAL=1 node --env-file=.env src/store-scp.js
 
 # Experimental Study Root FIND SCP: separate local listener (port 11115).
 # Requires enabled peer AE registry before start; restart to reload registry.
@@ -53,6 +56,8 @@ The HTTP server defaults to **127.0.0.1:3000** and DIMSE to **127.0.0.1:11112**.
 | GET | /dicomweb/studies/{study}/series/{series}/metadata | Series metadata subset |
 | GET | /dicomweb/studies/{study}/series/{series}/instances/{instance}/metadata | Instance metadata subset |
 | GET | /dicomweb/studies/{study}/series/{series}/instances/{instance} | Full DICOM object in multipart/related |
+| GET | /dicomweb/studies/{study}/series/{series}/instances/{instance}/frames/{list} | Uncompressed WADO-RS frames (multipart octet-stream) |
+| GET | /dicomweb/studies/{study}/series/{series}/instances/{instance}/bulkdata/7fe00010 | WADO-RS PixelData BulkDataURI |
 | POST | /api/v1/ris/worklist-orders | Create an idempotent RIS order + scheduled procedure step |
 | GET | /api/v1/ris/worklist-orders | List orders (stationAet/status filters) |
 | GET | /api/v1/ris/worklist-orders/{id} | Return one order |
@@ -93,7 +98,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/dimse/find \
  -d '{"aet":"SIMULATOR","studyUID":"1.2.840.10008.1.2.3"}'
 ```
 
-`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip, delivery-rule/queue/retry integration, and Study Root C-FIND plus C-MOVE SCP tests against PostgreSQL. CI uses JavaScript DIMSE and independent DCMTK `findscu`, `movescu`, `storescp` and `getscu`. It also verifies MWL C-FIND `findscu -W` with synthetic RIS orders, cancellation, issuer isolation, synthetic image ingest and explicit identity reconciliation. This **does not** prove interoperability with real radiology devices, all DIMSE services, OHIF, full DICOM conformance, or clinical safety.
+`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip, delivery-rule/queue/retry integration, and Study Root C-FIND plus C-MOVE SCP tests against PostgreSQL. CI uses JavaScript DIMSE and independent DCMTK `findscu`, `movescu`, `storescp` and `getscu`. It also verifies MWL C-FIND `findscu -W` with synthetic RIS orders, cancellation, issuer isolation, synthetic image ingest and explicit identity reconciliation. DCMTK `echoscu` and `storescu` prove the separate JS C-STORE SCP accepts a synthetic image and QIDO/WADO can find it immediately. WADO frame retrieval for single-/two-frame synthetic data is tested. This **does not** prove interoperability with real radiology devices, all DIMSE services, OHIF, full DICOM conformance, or clinical safety.
 
 ## Scope / architecture
 
@@ -118,7 +123,9 @@ Study Root C-FIND SCP is implemented as a separate **experimental loopback-only*
 
 A standalone [Modality Worklist SCP](docs/MWL_SCP.md) on 127.0.0.1:11116 now reads scheduled RIS orders from PostgreSQL (not imaging metadata) and returns DICOM `ScheduledProcedureStepSequence`; it is gated by `PACS_MWL_EXPERIMENTAL=1`. The RIS API requires issuer-qualified Patient IDs and accession references; a reconciliation endpoint reports matching evidence without automatically merging patients.
 
-Known gaps: WADO metadata is incomplete, frame endpoints and pixel-data bulk retrieval aren't implemented, remote/TLS DIMSE security and full DICOM MWL conformance are not implemented, OHIF is not connected, and the asynchronous inbox worker needs production-grade crash recovery. See [docs/STATUS.md](docs/STATUS.md).
+Experimental [WADO-RS frame/bulkdata endpoints and OHIF config template](docs/WADO_OHIF.md) now support 8/16-bit **uncompressed** LE frames and metadata pixel-data URIs; OHIF actual rendering is **not verified**. The separate JavaScript C-STORE SCP has passed DCMTK `echoscu`/`storescu` and indexes the object before confirming Success. See [inbound C-STORE guide](docs/STORE_SCP.md).
+
+Known gaps: WADO metadata is a limited subset, compressed frames/transcoding and full WADO conformance aren't implemented, remote/TLS DIMSE security and full DICOM MWL conformance are not implemented, OHIF viewer hasn't been run end-to-end, and the asynchronous inbox worker needs production-grade crash recovery. See [docs/STATUS.md](docs/STATUS.md).
 
 ## License and third-party dependencies
 
