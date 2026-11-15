@@ -5,9 +5,19 @@ import { validUID } from './dicom.js';
 export class MoveSelectionError extends Error {
   constructor(message,code='INVALID_MOVE') { super(message); this.code=code; }
 }
-function value(v) {
-  if(Array.isArray(v)) {if(v.length!==1)throw new MoveSelectionError('Ambiguous identifier'); return value(v[0]);}
-  if(typeof v!=='string')throw new MoveSelectionError('Invalid identifier type');
+function value(v,key='identifier') {
+  if(v==null)return '';
+  if(Array.isArray(v)) {
+    if(v.length===0)return '';
+    if(v.length!==1)throw new MoveSelectionError('Ambiguous identifier: '+key);
+    return value(v[0],key);
+  }
+  if(typeof v==='object') {
+    if(Object.hasOwn(v,'Value')) return value(v.Value,key);
+    if(Object.hasOwn(v,'Alphabetic')) return value(v.Alphabetic,key);
+    if(Object.keys(v).length===0)return '';
+  }
+  if(typeof v!=='string')throw new MoveSelectionError('Invalid identifier type for '+key);
   return v.trim().replace(/\u0000+$/g,'');
 }
 export function normalizeMove(input) {
@@ -22,12 +32,12 @@ export function normalizeMove(input) {
     IMAGE:['QueryRetrieveLevel','StudyInstanceUID','SeriesInstanceUID','SOPInstanceUID']
   }[level];
   for(const [key,v] of Object.entries(input)) {
-    if(!permitted.includes(key) && v!==undefined && v!==null && value(v)!=='')
+    if(!permitted.includes(key) && v!==undefined && v!==null && value(v,key)!=='')
       throw new MoveSelectionError('Unsupported C-MOVE matching key');
   }
   const selected={level};
   for(const k of permitted.filter(x=>x!=='QueryRetrieveLevel')) {
-    const v=value(input[k]||'');
+    const v=value(input[k]||'',k);
     if(!validUID(v)) throw new MoveSelectionError('Missing or invalid '+k);
     selected[k]=v;
   }
