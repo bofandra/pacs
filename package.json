@@ -13,10 +13,11 @@
     "worker": "node src/inbox-worker.js",
     "dimse:scp": "node src/dimse-scp.js",
     "test": "node --test test/*.test.js",
-    "check": "node --check src/server.js && node --check src/catalog.js && node --check src/dicom.js && node --check src/dimse.js && node --check src/inbox-worker.js && node --check src/routing.js && node --check src/delivery-worker.js && node --check src/delivery-transport.js && node --check src/native-store-child.js && node --check src/migrate.js && node --check src/find-query.js && node --check src/find-scp.js && node --check src/move-query.js && node --check src/move-scp.js && node --check src/move-transfer.js && node --check src/get-scp.js && node --check src/get-transport.js && node --check src/mwl-orders.js && node --check src/mwl-query.js && node --check src/mwl-scp.js && node --check src/mwl-reconcile.js",
+    "check": "node --check src/server.js && node --check src/catalog.js && node --check src/dicom.js && node --check src/dimse.js && node --check src/inbox-worker.js && node --check src/routing.js && node --check src/delivery-worker.js && node --check src/delivery-transport.js && node --check src/native-store-child.js && node --check src/migrate.js && node --check src/find-query.js && node --check src/find-scp.js && node --check src/move-query.js && node --check src/move-scp.js && node --check src/move-transfer.js && node --check src/get-scp.js && node --check src/get-transport.js && node --check src/mwl-orders.js && node --check src/mwl-query.js && node --check src/mwl-scp.js && node --check src/mwl-reconcile.js && node --check src/store-scp.js",
     "delivery:worker": "node src/delivery-worker.js",
     "dimse:find-scp": "node src/find-scp.js",
-    "dimse:mwl-scp": "node src/mwl-scp.js"
+    "dimse:mwl-scp": "node src/mwl-scp.js",
+    "dimse:store-js": "node src/store-scp.js"
   },
   "dependencies": {
     "dicom-parser": "^1.8.21",
