@@ -1,6 +1,6 @@
 # Experimental PostgreSQL-backed Study Root C-FIND SCP
 
-**Not for clinical use.** This standalone Node.js listener implements DICOM Study Root **C-FIND** only (STUDY, SERIES, IMAGE), using the same PostgreSQL PACS catalog as STOW-RS/QIDO-RS. It does not outsource indexing to an external PACS or use Orthanc/dcm4chee.
+**Not for clinical use.** This standalone Node.js listener implements DICOM Study Root **C-FIND** (STUDY, SERIES, IMAGE) with optional experimental **C-MOVE**, using the same PostgreSQL PACS catalog as STOW-RS/QIDO-RS. It does not outsource indexing to an external PACS or use Orthanc/dcm4chee.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ Start after registering peers (allowlist snapshot is taken at startup):
 PACS_FIND_EXPERIMENTAL=1 node --env-file=.env src/find-scp.js
 ```
 
-The C-FIND listener is **127.0.0.1:11115**, not `0.0.0.0`; the separate native C-STORE SCP retains its own port `11112`. The C-FIND listener accepts only known calling AE titles from enabled `ae_nodes` rows whose registered IPv4 address equals the TCP remote address, and only when the called AE matches `PACS_AET`. It rejects unsupported presentation contexts.
+The C-FIND listener is **127.0.0.1:11115**, not `0.0.0.0`; the separate native C-STORE SCP retains its own port `11112`. The Query/Retrieve listener accepts only known calling AE titles from enabled `ae_nodes` rows whose registered IPv4 address equals the TCP remote address, and only when the called AE matches `PACS_AET`. It rejects unsupported presentation contexts.
 
 ## Independently verify with DCMTK
 
@@ -64,7 +64,7 @@ GitHub Actions runs the same flow with an independent `findscu` executable in ad
 
 ## Limitations and safety
 
-- **C-MOVE and C-GET SCP are not implemented**; their presentation contexts are rejected. They require verified C-STORE suboperations, SOP Class/Transfer Syntax negotiation, counters, and error status handling.
+- **C-MOVE SCP is implemented as a separate opt-in** (`PACS_MOVE_EXPERIMENTAL=1`); its destination is restricted to registered loopback IPv4 AEs. See [C-MOVE guide](MOVE_SCP.md). **C-GET SCP is not implemented** and its presentation context is rejected.
 - Worklist C-FIND (MWL), Patient Root, Patient/Study-only Root, relational queries and advanced matching are not implemented.
 - No Patient ID issuer scoping, RBAC, TLS or comprehensive query access audit. Never expose on a clinical or public interface.
 - C-FIND peer registry is loaded at startup; restart this listener after an AE registry change. The listener only binds to loopback and does not allow remote hosts.
