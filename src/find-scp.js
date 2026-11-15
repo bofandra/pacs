@@ -65,6 +65,9 @@ export function createFindScpClass({catalog,peers,aet}) {
         responses.push(complete);
         callback(responses);
       } catch(error) {
+        // Never log patient identifiers or raw datasets; numeric database codes only.
+        console.warn('C-FIND rejected',error instanceof FindQueryError?error.code:
+          /^[A-Z0-9]{5}$/.test(error?.code??'')?error.code:'INTERNAL');
         const response=CFindResponse.fromRequest(request);
         response.setStatus(error instanceof FindQueryError && error.code==='TOO_MANY_RESULTS'
           ?Status.OutOfResourcesNumberOfMatches:Status.ProcessingFailure);
