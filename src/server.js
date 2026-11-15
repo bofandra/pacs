@@ -8,6 +8,7 @@ import { runDimse } from './dimse.js';
 import { listRules,addRule,setRuleEnabled,enqueueManual,listJobs,retryJob } from './routing.js';
 import {createWorklistOrder,listWorklistOrders,getWorklistOrder,changeWorklistOrderStatus} from './mwl-orders.js';
 import {reconcileWorklistOrder} from './mwl-reconcile.js';
+import {buildDicomJsonMetadata,extractUncompressedPixels,parseFrameList,makeBulkMultipart,validateDicomPath} from './wado.js';
 
 const conf=config();
 if (!conf.token || conf.token.length<20) throw new Error('Set API_TOKEN (>=20 chars) before starting HTTP API');
@@ -60,19 +61,29 @@ app.get('/dicomweb/studies/:study/series/:series/instances',async(req,reply)=>{
 app.get('/dicomweb/studies/:study/metadata',async(req,reply)=>{
   onlyUIDs(req.params.study); reply.type(dicomType);
   const rows=await db.instances(req.params.study);
-  return rows.map(i=>withBulkDataUri(i.metadata,'/dicomweb',i.study_uid,i.series_uid,i.instance_uid));
+  return Promise.all(rows.map(async i=>buildDicomJsonMetadata(
+    await db.bytesFor(i),
+    '/dicomweb/studies/'+i.study_uid+'/series/'+i.series_uid+
+    '/instances/'+i.instance_uid+'/bulkdata/7fe00010'
+  )));
 });
 app.get('/dicomweb/studies/:study/series/:series/metadata',async(req,reply)=>{
   onlyUIDs(req.params.study,req.params.series); reply.type(dicomType);
   const rows=await db.instances(req.params.study,req.params.series);
-  return rows.map(i=>withBulkDataUri(i.metadata,'/dicomweb',i.study_uid,i.series_uid,i.instance_uid));
+  return Promise.all(rows.map(async i=>buildDicomJsonMetadata(
+    await db.bytesFor(i),
+    '/dicomweb/studies/'+i.study_uid+'/series/'+i.series_uid+
+    '/instances/'+i.instance_uid+'/bulkdata/7fe00010'
+  )));
 });
 app.get('/dicomweb/studies/:study/series/:series/instances/:instance/metadata',async(req,reply)=>{
   const {study,series,instance}=req.params;onlyUIDs(study,series,instance);
   const row=await db.instance(study,series,instance);
   if(!row) return reply.code(404).send({error:'Not found'});
   reply.type(dicomType);
-  return [withBulkDataUri(row.metadata,'/dicomweb',study,series,instance)];
+  return [buildDicomJsonMetadata(await db.bytesFor(row),
+    '/dicomweb/studies/'+study+'/series/'+series+
+    '/instances/'+instance+'/bulkdata/7fe00010')];
 });
 app.get('/dicomweb/studies/:study/series/:series/instances/:instance',async(req,reply)=>{
   const {study,series,instance}=req.params;onlyUIDs(study,series,instance);
@@ -80,6 +91,33 @@ app.get('/dicomweb/studies/:study/series/:series/instances/:instance',async(req,
   if(!row) return reply.code(404).send({error:'Not found'});
   const mime=buildDicomMultipart(await db.bytesFor(row),'pacs-'+randomBytes(12).toString('hex'));
   return reply.type(mime.type).send(mime.data);
+});
+// WADO-RS RetrieveFrames & RetrieveBulkdata. Uncompressed LE only.
+// A full DICOM Part 10 object is served separately above; this endpoint does
+// not decode compressed or unsupported PixelData.
+app.get('/dicomweb/studies/:study/series/:series/instances/:instance/frames/:list',async(req,reply)=>{
+  const {study,series,instance,list}=req.params;
+  validateDicomPath(study,series,instance);
+  const frames=parseFrameList(list);
+  const row=await db.instance(study,series,instance);
+  if(!row)return reply.code(404).send({error:'Not found'});
+  const bytes=await db.bytesFor(row);
+  const data=extractUncompressedPixels(bytes,frames);
+  const url='/dicomweb/studies/'+study+'/series/'+series+'/instances/'+instance;
+  const result=makeBulkMultipart(data.frames,url,'pacs-'+randomBytes(12).toString('hex'));
+  reply.header('Cache-Control','private, no-store');
+  return reply.type(result.type).send(result.buffer);
+});
+app.get('/dicomweb/studies/:study/series/:series/instances/:instance/bulkdata/7fe00010',async(req,reply)=>{
+  const {study,series,instance}=req.params;
+  validateDicomPath(study,series,instance);
+  const row=await db.instance(study,series,instance);
+  if(!row)return reply.code(404).send({error:'Not found'});
+  const data=extractUncompressedPixels(await db.bytesFor(row));
+  const url='/dicomweb/studies/'+study+'/series/'+series+'/instances/'+instance+'/bulkdata/7fe00010';
+  const result=makeBulkMultipart([{bytes:data.buffer}],url,'pacs-'+randomBytes(12).toString('hex'));
+  reply.header('Cache-Control','private, no-store');
+  return reply.type(result.type).send(result.buffer);
 });
 app.post('/dicomweb/studies',async(req,reply)=>{
   if(!/^multipart\/related/i.test(req.headers['content-type']??''))

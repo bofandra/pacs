@@ -108,6 +108,53 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     assert.equal(retrieve.status,200);
     const wado=Buffer.from(await retrieve.arrayBuffer());
     assert.notEqual(wado.indexOf(original),-1,'WADO response must preserve original bytes');
+    const metaResp=await request('/dicomweb/studies/'+ids.study+'/metadata');
+    assert.equal(metaResp.status,200);
+    const metadata=await metaResp.json();
+    assert.equal(metadata.length,1);
+    assert.deepEqual(metadata[0]['00280010'],{vr:'US',Value:[1]});
+    assert.match(metadata[0]['7FE00010'].BulkDataURI,/bulkdata\/7fe00010$/);
+    const frame=await request('/dicomweb/studies/'+ids.study+'/series/'+ids.series+
+      '/instances/'+ids.instance+'/frames/1');
+    assert.equal(frame.status,200);
+    assert.match(frame.headers.get('content-type'),/multipart\/related.*application\/octet-stream/i);
+    const frameBody=Buffer.from(await frame.arrayBuffer());
+    assert.ok(frameBody.indexOf(Buffer.from([100,0]))>=0,
+      'WADO-RS frame must preserve the raw 16-bit pixel value');
+    assert.match(frameBody.toString('latin1'),/Content-Location: .*\/frames\/1/);
+    const bulk=await request(metadata[0]['7FE00010'].BulkDataURI);
+    assert.equal(bulk.status,200);
+    assert.ok(Buffer.from(await bulk.arrayBuffer()).indexOf(Buffer.from([100,0]))>=0);
+    assert.equal((await request('/dicomweb/studies/'+ids.study+'/series/'+ids.series+
+      '/instances/'+ids.instance+'/frames/2')).status,404);
+    assert.equal((await request('/dicomweb/studies/'+ids.study+'/series/'+ids.series+
+      '/instances/'+ids.instance+'/frames/x')).status,400);
+
+    // Two frames, 1x1 16bit monochrome pixel data. Verify frame boundaries.
+    const multi={study:uid(),series:uid(),instance:uid()};
+    const multiBase=makeSyntheticDicom(multi);
+    const pixelStart=multiBase.lastIndexOf(Buffer.from([0xe0,0x7f,0x10,0x00]));
+    assert.ok(pixelStart>128);
+    const twoFrames=Buffer.concat([
+      multiBase.subarray(0,pixelStart),
+      attr(0x0028,0x0008,'IS','2'),
+      attr(0x7fe0,0x0010,'OW',Buffer.from([100,0,200,0]))
+    ]);
+    const multiPart=buildDicomMultipart(twoFrames,'multi-wado-test');
+    assert.equal((await request('/dicomweb/studies',{
+      method:'POST',headers:{'Content-Type':multiPart.type},body:multiPart.data})).status,200);
+    const both=await request('/dicomweb/studies/'+multi.study+'/series/'+multi.series+
+      '/instances/'+multi.instance+'/frames/1,2');
+    assert.equal(both.status,200);
+    const body=Buffer.from(await both.arrayBuffer());
+    const encoded=body.toString('latin1');
+    assert.match(encoded,/\/frames\/1/);
+    assert.match(encoded,/\/frames\/2/);
+    assert.ok(body.includes(Buffer.from([100,0])));
+    assert.ok(body.includes(Buffer.from([200,0])));
+    const multiMetadata=await (await request('/dicomweb/studies/'+multi.study+'/metadata')).json();
+    assert.deepEqual(multiMetadata[0]['00280008'],{vr:'IS',Value:['2']});
+
     assert.equal((await store()).status,200,'identical SOP UID and digest are idempotent');
     const colliding=buildDicomMultipart(makeSyntheticDicom({...ids,name:'DIFFERENT^PATIENT'}),'collision-boundary');
     const conflict=await request('/dicomweb/studies',{method:'POST',headers:{'Content-Type':colliding.type},body:colliding.data});
