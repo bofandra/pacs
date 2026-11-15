@@ -70,6 +70,6 @@ For a SERIES query add `SeriesInstanceUID`; for IMAGE also add `SOPInstanceUID`.
 - One C-STORE association per instance; not efficient for high-volume imaging.
 - Unit tests cover partial errors; only one-instance DCMTK end-to-end success is tested. Multi-instance and network-interruption semantics must be independently verified.
 - Warning response may include Failed SOP Instance UID List; conformance and status handling need validation across devices.
-- C-GET SCP remains unimplemented: same-association C-STORE role negotiation is a separate task.
+- C-GET SCP is implemented as a separate experimental feature. It uses same-association C-STORE with SCU/SCP Role Selection; see [GET_SCP.md](GET_SCP.md).
 
 Standards: [DICOM PS3.4](https://dicom.nema.org/medical/dicom/current/output/html/part04.html), [DICOM PS3.2](https://dicom.nema.org/medical/dicom/current/output/html/part02.html).

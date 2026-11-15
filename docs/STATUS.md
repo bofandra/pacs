@@ -17,7 +17,7 @@
 | AE registry | PostgreSQL CRUD (protected HTTP API) | Synthetic HTTP/PostgreSQL integration passed |
 | C-FIND/C-MOVE/C-GET SCU | Native addon adapter to allowlisted registered AE | DICOM simulator tests required |
 | Study Root C-FIND SCP | Experimental PostgreSQL-backed STUDY/SERIES/IMAGE matching with AE+IP allowlist, loopback-only | JavaScript DIMSE client + DCMTK findscu CI passed; conformance/security tests outstanding |\n| Study Root C-MOVE SCP | Experimental, explicitly enabled, UID hierarchy, up to 10 instances, sends with C-STORE SCU to 127.0.0.1 registered AE | DCMTK movescu → storescp one synthetic instance: success (1/1); multiple and failure modes require further tests |
-| C-GET SCP | **NOT IMPLEMENTED** — presentation context rejected | Requires C-STORE same-association SCU/SCP role negotiation and confirmation |
+| Study Root C-GET SCP | Experimental, separately enabled, exact hierarchy UIDs (max 10), reverse C-STORE role negotiation, same-association C-STORE acknowledgments | DCMTK getscu returned one synthetic CR instance, C-GET completed=1; broader tests outstanding |
 | DICOM Modality Worklist SCP | **NOT IMPLEMENTED** | Native MWL support not available in selected addon |
 | DICOM routing | Automatic per-modality routing rules, persistent jobs, retries, dead-letter, audit, optional native C-STORE SCU worker | Synthetic PostgreSQL/worker integration passed; no network peer validation |
 | Backup/restore, TLS, RBAC, consent | **NOT IMPLEMENTED** | Needed before clinical use |
@@ -38,7 +38,7 @@
 - Supports Study/Series/Image levels with a bounded 100-result limit; parameterized wildcard matches, StudyDate ranges and mandatory hierarchy UIDs at lower levels.
 - Explicit startup gate `PACS_FIND_EXPERIMENTAL=1`, loopback-only TCP listener, registered enabled IPv4 AE + remote address check and called AE match; restart required after registry updates.
 - C-MOVE is now an **optional** listener capability gated by `PACS_MOVE_EXPERIMENTAL=1`, limited to explicit Study/Series/Image UIDs and 10 instances. Destination AE must be an enabled loopback peer. C-MOVE sends each object on a new C-STORE association and waits for the response before counting it complete.
-- The server continues to reject C-GET presentation contexts (not implemented).
+- Study Root C-GET can be explicitly enabled via `PACS_GET_EXPERIMENTAL=1` alongside the C-FIND listener. Only CR/DX/CT/MR SOP Classes and Implicit/Explicit VR Little Endian are accepted for reverse C-STORE. Missing negotiated requester SCP role is rejected, not silently assumed.
 - Independent DCMTK findscu integration succeeded on a synthetic CR study. See [docs/FIND_SCP.md](FIND_SCP.md).
 
 ## P1 C-MOVE interoperability
@@ -49,15 +49,24 @@
 - The C-MOVE service must not be enabled for real clinical traffic.
 - See [docs/MOVE_SCP.md](MOVE_SCP.md).
 
+## P1 C-GET interoperability
+
+- DCMTK `getscu` requested a synthetic study from Node.js C-GET SCP. The SCP sent C-STORE-RQ on the **same DIMSE association**, DCMTK acknowledged C-STORE Success, and C-GET completed with Success, Completed=1, Failed=0.
+- The C-STORE SCU role is explicitly negotiated from the requester's storage SOP presentation contexts; unsupported SOP Classes, transfer syntaxes or absent reverse role do not lead to false C-STORE success.
+- Unit tests cover missing role/context, missing study UID, success only after store acknowledgment and failure status on unsuccessful sub-operations.
+- C-GET has not been validated for compressed/multiframe studies, multiple devices, cancellation, TLS or clinical authorization. See [C-GET guide](GET_SCP.md).
+- CI evidence: https://github.com/bofandra/pacs/actions/runs/43700104020 (21/21 tests).
+
 ## Verified automated evidence
 
 - GitHub Actions initial core: https://github.com/bofandra/pacs/actions/runs/43686423562 (commit a6a41a81)
 - GitHub Actions routing integration: https://github.com/bofandra/pacs/actions/runs/43691572537 (commit 1124c744)
 - GitHub Actions C-FIND SCP + DCMTK: https://github.com/bofandra/pacs/actions/runs/43696156648 (commit c5b07b1a, 12/12 tests passed)
 - GitHub Actions C-MOVE SCP + DCMTK storescp: https://github.com/bofandra/pacs/actions/runs/43697401682 (commit 38b861ef, 17/17 tests passed)
+- GitHub Actions C-GET SCP + DCMTK getscu: https://github.com/bofandra/pacs/actions/runs/43700104020 (commit 96e9b6ff, 21/21 tests passed)
 - Node.js syntax check, unit tests, PostgreSQL migration, synthetic Part 10 DICOM parsing, HTTP STOW/QIDO/WADO roundtrip, checksum, duplicate/UID collision rejection and AE registry passed.
 - Routing CI validates atomic queueing, a mock-send worker, retry/backoff, dead-letter and replay. The native network transfer is **not** covered by CI.
-- **Not verified:** C-STORE/C-ECHO native *ingress* listener from a DICOM simulator; C-GET SCP; C-FIND/MOVE/GET SCU native adapter with external peers; MWL; OHIF; clinical rendering. C-FIND and C-MOVE SCP are verified with narrow synthetic cases only.
+- **Not verified:** C-STORE/C-ECHO native *ingress* listener from a simulator; C-FIND/MOVE/GET SCU native adapter with external peers; MWL; OHIF; clinical rendering. C-FIND, C-MOVE and C-GET SCP are only verified with limited synthetic cases.
 
 Backlog: [DIMSE SCP](https://github.com/bofandra/pacs/issues/2), [MWL](https://github.com/bofandra/pacs/issues/3), [routing](https://github.com/bofandra/pacs/issues/4), [OHIF](https://github.com/bofandra/pacs/issues/5).
 

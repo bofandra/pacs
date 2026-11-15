@@ -27,8 +27,9 @@ node --env-file=.env src/dimse-scp.js
 # Requires enabled peer AE registry before start; restart to reload registry.
 PACS_FIND_EXPERIMENTAL=1 node --env-file=.env src/find-scp.js
 
-# To enable C-MOVE as well (local synthetic-DICOM test only):
-PACS_FIND_EXPERIMENTAL=1 PACS_MOVE_EXPERIMENTAL=1 node --env-file=.env src/find-scp.js
+# To enable C-MOVE and C-GET (synthetic DICOM, loopback-only):
+PACS_FIND_EXPERIMENTAL=1 PACS_MOVE_EXPERIMENTAL=1 PACS_GET_EXPERIMENTAL=1 \
+ node --env-file=.env src/find-scp.js
 
 # Optional: P1 delivery/routing worker, for synthetic peer testing only
 node --env-file=.env src/delivery-worker.js
@@ -84,7 +85,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/dimse/find \
  -d '{"aet":"SIMULATOR","studyUID":"1.2.840.10008.1.2.3"}'
 ```
 
-`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip, delivery-rule/queue/retry integration, and Study Root C-FIND plus C-MOVE SCP tests against PostgreSQL. CI uses JavaScript DIMSE and independent DCMTK `findscu`, `movescu`, and `storescp` to verify one synthetic C-STORE suboperation. This **does not** prove interoperability with real radiology devices, all DIMSE services, OHIF, full DICOM conformance, or clinical safety.
+`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip, delivery-rule/queue/retry integration, and Study Root C-FIND plus C-MOVE SCP tests against PostgreSQL. CI uses JavaScript DIMSE and independent DCMTK `findscu`, `movescu`, `storescp` and `getscu` to verify C-MOVE on a new C-STORE association and C-GET on the original association. This **does not** prove interoperability with real radiology devices, all DIMSE services, OHIF, full DICOM conformance, or clinical safety.
 
 ## Scope / architecture
 
@@ -105,9 +106,9 @@ Original Part 10 files are preserved; ingestion rejects an existing SOP Instance
 
 [Routing and delivery guide](docs/ROUTING.md) covers AE setup, automatic rules, manual enqueue, test commands and retry semantics.
 
-Study Root C-FIND SCP is implemented as a separate **experimental loopback-only** service with database-backed STUDY/SERIES/IMAGE responses. Optional C-MOVE SCP sends verified Part 10 instances to an explicitly registered loopback destination using C-STORE suboperations and responds with completed/failed counters. The calling AE and destination AE must be enabled in the registry when the listener starts. See [C-FIND guide](docs/FIND_SCP.md) and [C-MOVE guide](docs/MOVE_SCP.md). **C-GET SCP is not implemented**, and its presentation context is rejected.
+Study Root C-FIND SCP is implemented as a separate **experimental loopback-only** service with database-backed STUDY/SERIES/IMAGE responses. Optional C-MOVE SCP sends verified Part 10 instances to an explicitly registered loopback destination using C-STORE suboperations and responds with completed/failed counters. The calling AE and destination AE must be enabled in the registry when the listener starts. See [C-FIND guide](docs/FIND_SCP.md) and [C-MOVE guide](docs/MOVE_SCP.md). C-GET SCP is separately opt-in and sends C-STORE suboperations on the **same association** only when reverse SCP role is negotiated. See [C-GET guide](docs/GET_SCP.md).
 
-Known gaps: WADO metadata is incomplete, frame endpoints and pixel-data bulk retrieval aren't implemented, C-GET **SCP**, MWL and full remote/tls DICOM Query/Retrieve security are not implemented, OHIF is not connected, and the asynchronous inbox worker needs production-grade crash recovery. See [docs/STATUS.md](docs/STATUS.md).
+Known gaps: WADO metadata is incomplete, frame endpoints and pixel-data bulk retrieval aren't implemented, MWL and full remote/TLS DICOM Query/Retrieve security are not implemented, OHIF is not connected, and the asynchronous inbox worker needs production-grade crash recovery. See [docs/STATUS.md](docs/STATUS.md).
 
 ## License and third-party dependencies
 
