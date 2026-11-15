@@ -1,0 +1,24 @@
+{
+  "name": "@bofandra/native-pacs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Native Node.js PACS prototype: DIMSE ingress, DICOMweb and PostgreSQL catalog",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "node src/migrate.js",
+    "worker": "node src/inbox-worker.js",
+    "dimse:scp": "node src/dimse-scp.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/server.js && node --check src/catalog.js && node --check src/dicom.js && node --check src/dimse.js && node --check src/inbox-worker.js"
+  },
+  "dependencies": {
+    "dicom-parser": "^1.8.21",
+    "fastify": "^5.6.0",
+    "pg": "^8.16.3"
+  },
+  "optionalDependencies": {
+    "dicom-dimse-native": "^2.6.1"
+  }
+}
