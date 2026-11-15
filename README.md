@@ -31,6 +31,9 @@ PACS_FIND_EXPERIMENTAL=1 node --env-file=.env src/find-scp.js
 PACS_FIND_EXPERIMENTAL=1 PACS_MOVE_EXPERIMENTAL=1 PACS_GET_EXPERIMENTAL=1 \
  node --env-file=.env src/find-scp.js
 
+# Experimental DICOM Modality Worklist SCP (separate 127.0.0.1:11116 listener):
+PACS_MWL_EXPERIMENTAL=1 node --env-file=.env src/mwl-scp.js
+
 # Optional: P1 delivery/routing worker, for synthetic peer testing only
 node --env-file=.env src/delivery-worker.js
 ```
@@ -50,6 +53,11 @@ The HTTP server defaults to **127.0.0.1:3000** and DIMSE to **127.0.0.1:11112**.
 | GET | /dicomweb/studies/{study}/series/{series}/metadata | Series metadata subset |
 | GET | /dicomweb/studies/{study}/series/{series}/instances/{instance}/metadata | Instance metadata subset |
 | GET | /dicomweb/studies/{study}/series/{series}/instances/{instance} | Full DICOM object in multipart/related |
+| POST | /api/v1/ris/worklist-orders | Create an idempotent RIS order + scheduled procedure step |
+| GET | /api/v1/ris/worklist-orders | List orders (stationAet/status filters) |
+| GET | /api/v1/ris/worklist-orders/{id} | Return one order |
+| PATCH | /api/v1/ris/worklist-orders/{id}/status | Mark scheduled/on_hold/completed/cancelled (validated transitions) |
+| GET | /api/v1/ris/worklist-orders/{id}/reconciliation | Compare ingested study against RIS identifiers (advisory only) |
 | GET | /api/v1/aes | Listed AE nodes |
 | PUT | /api/v1/aes/{AET} | Register or update peer AE |
 | POST | /api/v1/dimse/{find\|move\|get} | C-FIND/MOVE/GET SCU against registered peer |
@@ -85,7 +93,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/dimse/find \
  -d '{"aet":"SIMULATOR","studyUID":"1.2.840.10008.1.2.3"}'
 ```
 
-`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip, delivery-rule/queue/retry integration, and Study Root C-FIND plus C-MOVE SCP tests against PostgreSQL. CI uses JavaScript DIMSE and independent DCMTK `findscu`, `movescu`, `storescp` and `getscu` to verify C-MOVE on a new C-STORE association and C-GET on the original association, including two sequential C-STORE suboperations with correct Pending/Success counters. This **does not** prove interoperability with real radiology devices, all DIMSE services, OHIF, full DICOM conformance, or clinical safety.
+`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip, delivery-rule/queue/retry integration, and Study Root C-FIND plus C-MOVE SCP tests against PostgreSQL. CI uses JavaScript DIMSE and independent DCMTK `findscu`, `movescu`, `storescp` and `getscu`. It also verifies MWL C-FIND `findscu -W` with synthetic RIS orders, cancellation, issuer isolation, synthetic image ingest and explicit identity reconciliation. This **does not** prove interoperability with real radiology devices, all DIMSE services, OHIF, full DICOM conformance, or clinical safety.
 
 ## Scope / architecture
 
@@ -108,7 +116,9 @@ Original Part 10 files are preserved; ingestion rejects an existing SOP Instance
 
 Study Root C-FIND SCP is implemented as a separate **experimental loopback-only** service with database-backed STUDY/SERIES/IMAGE responses. Optional C-MOVE SCP sends verified Part 10 instances to an explicitly registered loopback destination using C-STORE suboperations and responds with completed/failed counters. The calling AE and destination AE must be enabled in the registry when the listener starts. See [C-FIND guide](docs/FIND_SCP.md) and [C-MOVE guide](docs/MOVE_SCP.md). C-GET SCP is separately opt-in and sends C-STORE suboperations on the **same association** only when reverse SCP role is negotiated. See [C-GET guide](docs/GET_SCP.md).
 
-Known gaps: WADO metadata is incomplete, frame endpoints and pixel-data bulk retrieval aren't implemented, MWL and full remote/TLS DICOM Query/Retrieve security are not implemented, OHIF is not connected, and the asynchronous inbox worker needs production-grade crash recovery. See [docs/STATUS.md](docs/STATUS.md).
+A standalone [Modality Worklist SCP](docs/MWL_SCP.md) on 127.0.0.1:11116 now reads scheduled RIS orders from PostgreSQL (not imaging metadata) and returns DICOM `ScheduledProcedureStepSequence`; it is gated by `PACS_MWL_EXPERIMENTAL=1`. The RIS API requires issuer-qualified Patient IDs and accession references; a reconciliation endpoint reports matching evidence without automatically merging patients.
+
+Known gaps: WADO metadata is incomplete, frame endpoints and pixel-data bulk retrieval aren't implemented, remote/TLS DIMSE security and full DICOM MWL conformance are not implemented, OHIF is not connected, and the asynchronous inbox worker needs production-grade crash recovery. See [docs/STATUS.md](docs/STATUS.md).
 
 ## License and third-party dependencies
 

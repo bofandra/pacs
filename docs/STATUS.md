@@ -18,7 +18,7 @@
 | C-FIND/C-MOVE/C-GET SCU | Native addon adapter to allowlisted registered AE | DICOM simulator tests required |
 | Study Root C-FIND SCP | Experimental PostgreSQL-backed STUDY/SERIES/IMAGE matching with AE+IP allowlist, loopback-only | JavaScript DIMSE client + DCMTK findscu CI passed; conformance/security tests outstanding |\n| Study Root C-MOVE SCP | Experimental, explicitly enabled, UID hierarchy, up to 10 instances, sends with C-STORE SCU to 127.0.0.1 registered AE | DCMTK movescu → storescp one synthetic instance: success (1/1); multiple and failure modes require further tests |
 | Study Root C-GET SCP | Experimental, separately enabled, exact hierarchy UIDs (max 10), reverse C-STORE role negotiation, same-association C-STORE acknowledgments | DCMTK getscu retrieved 1 and 2 synthetic CR instances, with corresponding C-GET Completed=1/2 and no failed suboperations; broader tests outstanding |
-| DICOM Modality Worklist SCP | **NOT IMPLEMENTED** | Native MWL support not available in selected addon |
+| DICOM Modality Worklist SCP | Experimental Node.js MWL C-FIND SOP Class 1.2.840.10008.5.1.4.31 on 127.0.0.1:11116, backed by RIS orders | DCMTK findscu -W matches scheduled CT worklist, issuer-scoped search and cancellation exclusion; broader modalities/charset require tests |
 | DICOM routing | Automatic per-modality routing rules, persistent jobs, retries, dead-letter, audit, optional native C-STORE SCU worker | Synthetic PostgreSQL/worker integration passed; no network peer validation |
 | Backup/restore, TLS, RBAC, consent | **NOT IMPLEMENTED** | Needed before clinical use |
 
@@ -57,6 +57,17 @@
 - C-GET has not been validated for compressed/multiframe studies, multiple devices, cancellation, TLS or clinical authorization. See [C-GET guide](GET_SCP.md).
 - CI evidence: https://github.com/bofandra/pacs/actions/runs/43700540176 (21/21 tests; one- and two-instance DCMTK getscu).
 
+## P1 Modality Worklist / RIS integration
+
+- REST API creates **issuer-qualified** RIS worklist orders with a unique source/external ID, Accession Number plus issuer, Requested Procedure, Scheduled Procedure Step, station AE, local DICOM DA/TM and explicit IANA timezone.
+- POST is idempotent for an identical payload. The same source/external order reference with different details is rejected, never silently overwritten.
+- Worklist records are separate from stored imaging Study/Series/Instance resources.
+- A dedicated experimental Node.js MWL SCP (called AE `PACS_MWL`) supports standard SOP Class `1.2.840.10008.5.1.4.31`, with a one-item `ScheduledProcedureStepSequence` and limited query matching. Results are always scoped to the **calling AE's station**; cancelled, completed, and on-hold orders are excluded.
+- DICOM `findscu -W` retrieves scheduled synthetic worklists using Accession Number, Patient ID/issuer, procedure, modality, and local schedule date. The integration test also validates order cancellation.
+- Explicit reconciliation of received imaging checks Study UID, Patient ID, Issuer of Patient ID, and Accession Number. When consistent, status is `identity_consistent`, **not a confirmed match** because Issuer of Accession Number Sequence is not yet parsed. Missing issuer evidence is insufficient; mismatches are never merged.
+- This is a subset, not complete DICOM MWL K.6 conformance. No detailed timezone range semantics across dates, code sequences, HIS authorization scopes, HL7 Order messages, N-SET performed procedure steps, or production transport/security.
+- CI evidence: https://github.com/bofandra/pacs/actions/runs/43705016109 (25/25 tests). See [docs/MWL_SCP.md](MWL_SCP.md).
+
 ## Verified automated evidence
 
 - GitHub Actions initial core: https://github.com/bofandra/pacs/actions/runs/43686423562 (commit a6a41a81)
@@ -64,9 +75,10 @@
 - GitHub Actions C-FIND SCP + DCMTK: https://github.com/bofandra/pacs/actions/runs/43696156648 (commit c5b07b1a, 12/12 tests passed)
 - GitHub Actions C-MOVE SCP + DCMTK storescp: https://github.com/bofandra/pacs/actions/runs/43697401682 (commit 38b861ef, 17/17 tests passed)
 - GitHub Actions C-GET SCP + DCMTK getscu: https://github.com/bofandra/pacs/actions/runs/43700540176 (commit 0519b7f7, 21/21 tests passed including two-instance retrieval)
+- GitHub Actions MWL C-FIND + RIS API + explicit reconciliation: https://github.com/bofandra/pacs/actions/runs/43705016109 (commit 2958e1e2, 25/25 tests passed)
 - Node.js syntax check, unit tests, PostgreSQL migration, synthetic Part 10 DICOM parsing, HTTP STOW/QIDO/WADO roundtrip, checksum, duplicate/UID collision rejection and AE registry passed.
 - Routing CI validates atomic queueing, a mock-send worker, retry/backoff, dead-letter and replay. The native network transfer is **not** covered by CI.
-- **Not verified:** C-STORE/C-ECHO native *ingress* listener from a simulator; C-FIND/MOVE/GET SCU native adapter with external peers; MWL; OHIF; clinical rendering. C-FIND, C-MOVE and C-GET SCP are only verified with limited synthetic cases.
+- **Not verified:** C-STORE/C-ECHO native *ingress* listener from a simulator; C-FIND/MOVE/GET SCU native adapter with external peers; MWL with actual radiology modalities or complete DICOM K.6 matching; OHIF; clinical rendering. C-FIND, C-MOVE and C-GET SCP are only verified with limited synthetic cases.
 
 Backlog: [DIMSE SCP](https://github.com/bofandra/pacs/issues/2), [MWL](https://github.com/bofandra/pacs/issues/3), [routing](https://github.com/bofandra/pacs/issues/4), [OHIF](https://github.com/bofandra/pacs/issues/5).
 
