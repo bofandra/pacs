@@ -6,6 +6,7 @@ import { element, validUID, withBulkDataUri } from './dicom.js';
 import { parseDicomMultipart, buildDicomMultipart } from './multipart.js';
 import { runDimse } from './dimse.js';
 import { listRules,addRule,setRuleEnabled,enqueueManual,listJobs,retryJob } from './routing.js';
+import {createWorklistOrder,listWorklistOrders,getWorklistOrder,changeWorklistOrderStatus} from './mwl-orders.js';
 
 const conf=config();
 if (!conf.token || conf.token.length<20) throw new Error('Set API_TOKEN (>=20 chars) before starting HTTP API');
@@ -95,6 +96,19 @@ app.post('/dicomweb/studies',async(req,reply)=>{
   }
   reply.type(dicomType).code(failed.length?202:200);
   return {'00081199':{vr:'SQ',Value:success},'00081198':{vr:'SQ',Value:failed}};
+});
+// Prototype RIS scheduling API. An authenticated caller owns its declared issuer
+// namespace; production requires per-system authorization and audit identities.
+app.post('/api/v1/ris/worklist-orders',async(req,reply)=>{
+  const result=await createWorklistOrder(db.pool,req.body);
+  return reply.code(result.created?201:200).send(result);
+});
+app.get('/api/v1/ris/worklist-orders',async(req)=>listWorklistOrders(db.pool,req.query??{}));
+app.get('/api/v1/ris/worklist-orders/:id',async(req)=>{
+  return getWorklistOrder(db.pool,Number(req.params.id));
+});
+app.patch('/api/v1/ris/worklist-orders/:id/status',async(req)=>{
+  return changeWorklistOrderStatus(db.pool,Number(req.params.id),req.body?.status);
 });
 app.get('/api/v1/aes',async()=>db.nodes());
 app.put('/api/v1/aes/:aet',async(req)=>db.upsertNode({...req.body,aet:req.params.aet}));
