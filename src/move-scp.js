@@ -22,7 +22,7 @@ export async function executeMove({dataset,destinationAet,catalog,peers,aet,
   try {instances=await selectMoveInstances(catalog.pool,dataset,{limit:10});}
   catch(error) {
     if(error instanceof MoveSelectionError)
-      throw new MoveRequestError('C-MOVE identifier rejected',error.code==='TOO_MANY_INSTANCES'
+      throw new MoveRequestError(error.message,error.code==='TOO_MANY_INSTANCES'
         ?MoveStatus.SuboperationsFailed:MoveStatus.InvalidIdentifier);
     throw error;
   }
