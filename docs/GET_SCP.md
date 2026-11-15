@@ -49,8 +49,8 @@ Use the StudyInstanceUID of an actual synthetic fixture, not the example UID abo
 
 ## What has been verified
 
-- GitHub Actions: https://github.com/bofandra/pacs/actions/runs/43700104020
-- Independent DCMTK `getscu` associated with the Node.js C-GET SCP and negotiated storage roles for the original connection.
+- GitHub Actions: https://github.com/bofandra/pacs/actions/runs/43700540176
+- Independent DCMTK `getscu` associated with the Node.js C-GET SCP and negotiated storage roles for the original connection. A second invocation retrieved **two SOP instances** with separate C-STORE acknowledgments and one C-GET Pending + final Success response.
 - The Node.js SCP selected one synthetic CR instance and sent a C-STORE-RQ on **that same association**.
 - DCMTK returned C-STORE Success; the PACS sent C-GET final Success (Remaining=0, Completed=1, Failed=0) and the saved instance's SOP UID matched the source.
 - Unit tests cover missing role, unsupported SOP Class, mismatched Transfer Syntax, malformed selection, and a failed C-STORE acknowledgement.
@@ -59,7 +59,7 @@ Use the StudyInstanceUID of an actual synthetic fixture, not the example UID abo
 
 - Supports only selected CR/DX/CT/MR SOP Classes and **Implicit/Explicit VR Little Endian**. Compressed Transfer Syntaxes are not advertised or transcoded.
 - Query must use Study/Series/Image level with explicit UIDs. Max 10 instances per C-GET request.
-- No C-CANCEL support or production-level async operation negotiation; sending multiple studies must be tested independently.
+- No C-CANCEL support or production-level async operation negotiation. The two-instance test passed, but large studies, differing modalities, and interrupted transfers need separate validation.
 - No patient-level RBAC, cross-facility consent, issuer scoping, audit of all read operations, TLS or production-safe storage life-cycle.
 - Keep the listener on loopback; there is no authenticated transport for actual hospital subnet use.
 - Current implementation is a prototype and not a PS3.2 Conformance Statement.

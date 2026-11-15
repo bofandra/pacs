@@ -17,7 +17,7 @@
 | AE registry | PostgreSQL CRUD (protected HTTP API) | Synthetic HTTP/PostgreSQL integration passed |
 | C-FIND/C-MOVE/C-GET SCU | Native addon adapter to allowlisted registered AE | DICOM simulator tests required |
 | Study Root C-FIND SCP | Experimental PostgreSQL-backed STUDY/SERIES/IMAGE matching with AE+IP allowlist, loopback-only | JavaScript DIMSE client + DCMTK findscu CI passed; conformance/security tests outstanding |\n| Study Root C-MOVE SCP | Experimental, explicitly enabled, UID hierarchy, up to 10 instances, sends with C-STORE SCU to 127.0.0.1 registered AE | DCMTK movescu → storescp one synthetic instance: success (1/1); multiple and failure modes require further tests |
-| Study Root C-GET SCP | Experimental, separately enabled, exact hierarchy UIDs (max 10), reverse C-STORE role negotiation, same-association C-STORE acknowledgments | DCMTK getscu returned one synthetic CR instance, C-GET completed=1; broader tests outstanding |
+| Study Root C-GET SCP | Experimental, separately enabled, exact hierarchy UIDs (max 10), reverse C-STORE role negotiation, same-association C-STORE acknowledgments | DCMTK getscu retrieved 1 and 2 synthetic CR instances, with corresponding C-GET Completed=1/2 and no failed suboperations; broader tests outstanding |
 | DICOM Modality Worklist SCP | **NOT IMPLEMENTED** | Native MWL support not available in selected addon |
 | DICOM routing | Automatic per-modality routing rules, persistent jobs, retries, dead-letter, audit, optional native C-STORE SCU worker | Synthetic PostgreSQL/worker integration passed; no network peer validation |
 | Backup/restore, TLS, RBAC, consent | **NOT IMPLEMENTED** | Needed before clinical use |
@@ -51,11 +51,11 @@
 
 ## P1 C-GET interoperability
 
-- DCMTK `getscu` requested a synthetic study from Node.js C-GET SCP. The SCP sent C-STORE-RQ on the **same DIMSE association**, DCMTK acknowledged C-STORE Success, and C-GET completed with Success, Completed=1, Failed=0.
+- DCMTK `getscu` requested one and then two synthetic CR instances from Node.js C-GET SCP. The SCP sent all C-STORE-RQ on the **same DIMSE association**, DCMTK acknowledged each C-STORE Success, and C-GET completed with Success, Completed=1/2 respectively, Failed=0.
 - The C-STORE SCU role is explicitly negotiated from the requester's storage SOP presentation contexts; unsupported SOP Classes, transfer syntaxes or absent reverse role do not lead to false C-STORE success.
-- Unit tests cover missing role/context, missing study UID, success only after store acknowledgment and failure status on unsuccessful sub-operations.
+- Unit tests cover missing role/context, missing study UID, success only after store acknowledgment and failure status on unsuccessful sub-operations. The two-instance network test additionally checks SOP Instance UID matching and Pending/Success counters.
 - C-GET has not been validated for compressed/multiframe studies, multiple devices, cancellation, TLS or clinical authorization. See [C-GET guide](GET_SCP.md).
-- CI evidence: https://github.com/bofandra/pacs/actions/runs/43700104020 (21/21 tests).
+- CI evidence: https://github.com/bofandra/pacs/actions/runs/43700540176 (21/21 tests; one- and two-instance DCMTK getscu).
 
 ## Verified automated evidence
 
@@ -63,7 +63,7 @@
 - GitHub Actions routing integration: https://github.com/bofandra/pacs/actions/runs/43691572537 (commit 1124c744)
 - GitHub Actions C-FIND SCP + DCMTK: https://github.com/bofandra/pacs/actions/runs/43696156648 (commit c5b07b1a, 12/12 tests passed)
 - GitHub Actions C-MOVE SCP + DCMTK storescp: https://github.com/bofandra/pacs/actions/runs/43697401682 (commit 38b861ef, 17/17 tests passed)
-- GitHub Actions C-GET SCP + DCMTK getscu: https://github.com/bofandra/pacs/actions/runs/43700104020 (commit 96e9b6ff, 21/21 tests passed)
+- GitHub Actions C-GET SCP + DCMTK getscu: https://github.com/bofandra/pacs/actions/runs/43700540176 (commit 0519b7f7, 21/21 tests passed including two-instance retrieval)
 - Node.js syntax check, unit tests, PostgreSQL migration, synthetic Part 10 DICOM parsing, HTTP STOW/QIDO/WADO roundtrip, checksum, duplicate/UID collision rejection and AE registry passed.
 - Routing CI validates atomic queueing, a mock-send worker, retry/backoff, dead-letter and replay. The native network transfer is **not** covered by CI.
 - **Not verified:** C-STORE/C-ECHO native *ingress* listener from a simulator; C-FIND/MOVE/GET SCU native adapter with external peers; MWL; OHIF; clinical rendering. C-FIND, C-MOVE and C-GET SCP are only verified with limited synthetic cases.
