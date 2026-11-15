@@ -23,6 +23,10 @@ In separate shells, for DIMSE C-STORE inbox and indexing:
 node --env-file=.env src/inbox-worker.js
 node --env-file=.env src/dimse-scp.js
 
+# Experimental Study Root FIND SCP: separate local listener (port 11115).
+# Requires enabled peer AE registry before start; restart to reload registry.
+PACS_FIND_EXPERIMENTAL=1 node --env-file=.env src/find-scp.js
+
 # Optional: P1 delivery/routing worker, for synthetic peer testing only
 node --env-file=.env src/delivery-worker.js
 ```
@@ -77,7 +81,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/dimse/find \
  -d '{"aet":"SIMULATOR","studyUID":"1.2.840.10008.1.2.3"}'
 ```
 
-`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip plus delivery-rule/queue/retry integration against PostgreSQL. It **does not** prove DIMSE interoperability, OHIF, complete DICOM conformance, or clinical safety.
+`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip, delivery-rule/queue/retry integration, and Study Root C-FIND SCP tests against PostgreSQL using both a JavaScript DIMSE client and the independent DCMTK findscu tool. It **does not** prove DIMSE interoperability, OHIF, complete DICOM conformance, or clinical safety.
 
 ## Scope / architecture
 
@@ -97,6 +101,8 @@ DICOMweb STOW --> Node.js Fastify --> DICOM parser --> PostgreSQL index
 Original Part 10 files are preserved; ingestion rejects an existing SOP Instance UID with different SHA-256 bytes. STOW parses `multipart/related` but is a protocol subset, not a certified implementation. Delivery worker is at-least-once (remote destination should handle repeated SOP Instance UID idempotently), not exactly-once.
 
 [Routing and delivery guide](docs/ROUTING.md) covers AE setup, automatic rules, manual enqueue, test commands and retry semantics.
+
+Study Root C-FIND SCP is implemented as a separate **experimental loopback-only** service with database-backed STUDY/SERIES/IMAGE responses. It requires explicitly enabled calling AE entries in the registry. See [C-FIND SCP guide](docs/FIND_SCP.md). C-MOVE and C-GET **SCP are not implemented** and their presentation contexts are rejected.
 
 Known gaps: WADO metadata is incomplete, frame endpoints and pixel-data bulk retrieval aren't implemented, C-FIND/MOVE/GET **SCP** and MWL are not implemented, OHIF is not connected, and the asynchronous inbox worker needs production-grade crash recovery. See [docs/STATUS.md](docs/STATUS.md).
 
