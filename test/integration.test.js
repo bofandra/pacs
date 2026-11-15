@@ -361,6 +361,38 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
           const instances=await Promise.all(candidateFiles.map(async p=>parseDicom(await fs.readFile(p))));
           assert.ok(instances.some(x=>x.instanceUID===ids.instance),
             'C-GET must return the correct SOP Instance UID');
+
+          // Validate multiple C-STORE suboperations and C-GET counters on one association.
+          const secondInstance=uid();
+          const secondBody=makeSyntheticDicom({...ids,instance:secondInstance});
+          const extra=buildDicomMultipart(secondBody,'get-multi-boundary');
+          const ingested=await request('/dicomweb/studies',{
+            method:'POST',headers:{'Content-Type':extra.type},body:extra.data
+          });
+          assert.equal(ingested.status,200,'second synthetic image must ingest');
+
+          const multipleRoot=await fs.mkdtemp(path.join(os.tmpdir(),'pacs-get-multiple-'));
+          try {
+            const response=await execFile('getscu',[
+              '-S','-v','-aet','SIMULATOR','-aec','PACS_NATIVE',
+              '-od',multipleRoot,
+              '-k','QueryRetrieveLevel=STUDY','-k','StudyInstanceUID='+ids.study,
+              '127.0.0.1','32190'
+            ],{timeout:30000,maxBuffer:2500000});
+            const log=response.stdout+response.stderr;
+            assert.match(log,/Success|0x0000/i,'multi-instance C-GET must succeed');
+            let candidates=[];
+            for(let n=0;n<40;n++) {
+              candidates=(await fs.readdir(multipleRoot,{recursive:true})).map(x=>path.join(multipleRoot,x));
+              if(candidates.length>=2)break;
+              await delay(100);
+            }
+            const returned=[];
+            for(const p of candidates) if((await fs.stat(p)).isFile())
+              returned.push(parseDicom(await fs.readFile(p)).instanceUID);
+            assert.deepEqual(returned.sort(),[ids.instance,secondInstance].sort(),
+              'C-GET must return BOTH original SOP Instance UIDs');
+          }finally{await fs.rm(multipleRoot,{recursive:true,force:true});}
         } finally {await fs.rm(getRoot,{recursive:true,force:true});}
       }
       await assert.rejects(
