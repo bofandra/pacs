@@ -34,7 +34,7 @@ export function parseDicom(buffer) {
     // Stop before PixelData to avoid traversing large encapsulated payloads.
     ds = dicomParser.parseDicom(new Uint8Array(buffer), { untilTag: 'x7fe00010' });
   } catch (error) { throw new Error(`Unable to parse DICOM: ${error.message}`); }
-  const get = tag => (ds.string('x' + tag) ?? '').trim();
+  const get = tag => (ds.string('x' + tag) ?? '').replace(/\u0000+$/g, '').trim();
   const meta = {};
   for (const [tag, [,vr]] of Object.entries(TAGS)) {
     const binary = vr === 'US' ? ds.uint16('x' + tag) : undefined;
