@@ -5,9 +5,10 @@ import dimsePackage from 'dcmjs-dimse';
 import { config } from './config.js';
 import { PacsCatalog } from './catalog.js';
 import { findStudyRoot, FindQueryError } from './find-query.js';
+import { executeMove, MoveRequestError, MoveStatus } from './move-scp.js';
 
 const { Dataset, Scp, Server }=dimsePackage;
-const { CEchoResponse, CFindResponse }=dimsePackage.responses;
+const { CEchoResponse, CFindResponse, CMoveResponse }=dimsePackage.responses;
 const { Status, SopClass, TransferSyntax, PresentationContextResult,
   RejectResult,RejectSource,RejectReason }=dimsePackage.constants;
 const supportedSyntaxes=new Set([
@@ -21,7 +22,7 @@ function matchPeer(peers,called,calling,ip,ownAet) {
     return {ok:false,reason:RejectReason.CallingAeNotRecognized};
   return {ok:true};
 }
-export function createFindScpClass({catalog,peers,aet}) {
+export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSender}) {
   return class PacsFindScp extends Scp {
     associationRequested(association) {
       const called=association.getCalledAeTitle().trim();
@@ -35,7 +36,8 @@ export function createFindScpClass({catalog,peers,aet}) {
         const ctx=association.getPresentationContext(proposed.id);
         const abstract=ctx.getAbstractSyntaxUid();
         if(abstract!==SopClass.Verification &&
-           abstract!==SopClass.StudyRootQueryRetrieveInformationModelFind) {
+           abstract!==SopClass.StudyRootQueryRetrieveInformationModelFind &&
+           !(moveEnabled && abstract===SopClass.StudyRootQueryRetrieveInformationModelMove)) {
           ctx.setResult(PresentationContextResult.RejectAbstractSyntaxNotSupported);
           continue;
         }
@@ -75,8 +77,41 @@ export function createFindScpClass({catalog,peers,aet}) {
         callback(response);
       }
     }
-    // C-MOVE/C-GET presentation contexts are intentionally rejected until correct
-    // C-STORE suboperations, response counters and association role negotiation exist.
+    async cMoveRequest(request,callback) {
+      if(!moveEnabled) {
+        const rejected=CMoveResponse.fromRequest(request);
+        rejected.setStatus(MoveStatus.InvalidIdentifier);
+        callback(rejected);
+        return;
+      }
+      const response=(data)=>{
+        const item=CMoveResponse.fromRequest(request);
+        item.setStatus(data.status);
+        item.setRemaining(data.remaining??0);
+        item.setCompleted(data.completed??0);
+        item.setFailures(data.failed??0);
+        item.setWarnings(data.warnings??0);
+        if(data.failedUIDs?.length) {
+          item.setDataset(new Dataset({FailedSOPInstanceUIDList:data.failedUIDs.join('\\')}));
+        }
+        callback(item);
+      };
+      try {
+        const dataset=request.getDataset()?.getElements() ?? {};
+        const destination=request.getCommandDataset().getElement('MoveDestination');
+        const result=await executeMove({
+          dataset,destinationAet:destination,catalog,peers,aet,send:moveSender,
+          onProgress:response
+        });
+        response(result);
+      } catch(error) {
+        // Never expose database detail or raw clinical metadata over the wire.
+        response({status:error instanceof MoveRequestError
+          ?error.status:MoveStatus.SuboperationsFailed,
+          completed:0,failed:0,remaining:0,warnings:0});
+      }
+    }
+    // C-GET contexts are intentionally rejected until correct role negotiation exists.
     associationReleaseRequested(){this.sendAssociationReleaseResponse();}
   };
 }
@@ -109,11 +144,13 @@ export async function startFindScp() {
     const nodes=await catalog.nodes();
     const peers=new Map(nodes.filter(n=>n.enabled && net.isIP(n.host)===4)
       .map(n=>[n.aet,n]));
-    const Klass=createFindScpClass({catalog,peers,aet:conf.aet});
+    const moveEnabled=process.env.PACS_MOVE_EXPERIMENTAL==='1';
+    const Klass=createFindScpClass({catalog,peers,aet:conf.aet,moveEnabled});
     const server=new LoopbackDimseServer(Klass);
     server.on('networkError',()=>{console.error('DICOM C-FIND SCP network error');});
     server.listen(port,{associationTimeout:15000,pduTimeout:30000,logCommandDatasets:false,logDatasets:false});
-    console.log('Experimental C-FIND SCP listening at 127.0.0.1:'+port+' with '+peers.size+' enabled AE peers');
+    console.log('Experimental Query SCP listening at 127.0.0.1:'+port+
+      ' with '+peers.size+' enabled AE peers; C-MOVE '+(moveEnabled?'enabled':'disabled'));
     const close=async()=>{server.close();await catalog.close();};
     return {server,catalog,close};
   } catch(error) {await catalog.close();throw error;}

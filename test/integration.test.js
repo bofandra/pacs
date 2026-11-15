@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import net from 'node:net';
 import { config } from '../src/config.js';
 import { PacsCatalog } from '../src/catalog.js';
 import { processDeliveryJob } from '../src/delivery-worker.js';
@@ -220,7 +222,13 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     } finally {await catalog.close();}
     // Real DIMSE association and C-FIND against the same PostgreSQL catalog.
     // This is a synthetic-data library client test, not yet independent DCMTK certification.
+    const outputRoot=await fs.mkdtemp(path.join(os.tmpdir(),'pacs-movescu-'));
+    const aeDest=await request('/api/v1/aes/DEST_SCP',{method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({host:'127.0.0.1',port:32191,enabled:true})});
+    assert.equal(aeDest.status,200);
     process.env.PACS_FIND_EXPERIMENTAL='1';
+    process.env.PACS_MOVE_EXPERIMENTAL='1';
     process.env.PACS_FIND_PORT='32190';
     const findService=await startFindScp();
     try {
@@ -277,6 +285,54 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
         assert.ok(output.includes(ids.study),'DCMTK findscu must return the queried study');
         assert.ok(output.includes('SYNTHETIC-001'),'DCMTK response must include PatientID');
       }
+      if(process.env.PACS_DCMTK==='1') {
+        // Independent DCMTK C-MOVE SCU and C-STORE SCP interoperability test.
+        // Only synthetic Part 10 files are used; destination AE must be registered.
+        const storeScp=spawn('storescp',[
+          '-aet','DEST_SCP','-od',outputRoot,'32191'
+        ],{stdio:'ignore'});
+        try {
+          let listening=false;
+          for(let n=0;n<50;n++) {
+            if(storeScp.exitCode!==null)throw Error('DCMTK storescp stopped before listening');
+            try {
+              await new Promise((resolve,reject)=>{
+                const sock=net.connect(32191,'127.0.0.1');
+                sock.once('connect',()=>{sock.destroy();resolve();});
+                sock.once('error',reject);
+              });
+              listening=true;break;
+            }catch{await delay(100);}
+          }
+          assert.equal(listening,true,'DCMTK storescp must accept local connections');
+          const moveResult=await execFile('movescu',[
+            '-S','-v','-aet','SIMULATOR','-aec','PACS_NATIVE','-aem','DEST_SCP',
+            '-k','QueryRetrieveLevel=STUDY','-k','StudyInstanceUID='+ids.study,
+            '127.0.0.1','32190'
+          ],{timeout:25000,maxBuffer:2000000});
+          const output=moveResult.stdout+moveResult.stderr;
+          assert.match(output,/Success|0x0000/i,'C-MOVE must end with DICOM Success');
+          let received=[];
+          for(let n=0;n<40;n++) {
+            received=await fs.readdir(outputRoot,{recursive:true});
+            if(received.length)break;
+            await delay(100);
+          }
+          const candidates=[];
+          for(const name of received) {
+            const full=path.join(outputRoot,name);
+            if((await fs.stat(full)).isFile()) candidates.push(full);
+          }
+          assert.ok(candidates.length>0,'DCMTK storescp must persist received instance');
+          const parsedCandidates=await Promise.all(candidates.map(async p=>parseDicom(await fs.readFile(p))));
+          assert.ok(parsedCandidates.some(x=>x.instanceUID===ids.instance),
+            'C-MOVE destination must receive SOP Instance UID matching PACS study');
+        } finally {
+          storeScp.kill('SIGTERM');
+          await delay(150);
+          if(storeScp.exitCode===null)storeScp.kill('SIGKILL');
+        }
+      }
       await assert.rejects(
         findOverWire('STUDY',{StudyInstanceUID:ids.study},'UNKNOWN_AET'),
         /rejected|closed|network/i
@@ -284,7 +340,9 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     } finally {
       await findService.close();
       delete process.env.PACS_FIND_EXPERIMENTAL;
+      delete process.env.PACS_MOVE_EXPERIMENTAL;
       delete process.env.PACS_FIND_PORT;
+      await fs.rm(outputRoot,{recursive:true,force:true});
     }
     assert.equal((await fetch(base+'/dicomweb/studies')).status,401);
   } finally {
