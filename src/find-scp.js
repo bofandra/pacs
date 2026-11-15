@@ -105,6 +105,9 @@ export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSend
         });
         response(result);
       } catch(error) {
+        // Log only internal error category/status, never the request dataset.
+        console.warn('C-MOVE rejected',error instanceof MoveRequestError
+          ? error.message : 'INTERNAL',error?.status??0);
         // Never expose database detail or raw clinical metadata over the wire.
         response({status:error instanceof MoveRequestError
           ?error.status:MoveStatus.SuboperationsFailed,
