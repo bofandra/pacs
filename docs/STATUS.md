@@ -6,20 +6,28 @@
 | --- | --- | --- |
 | C-ECHO SCP | Native addon startStoreScp listener configured | Integration test required |
 | C-STORE SCP | Native addon writes incoming instances to inbox | Integration test required |
-| Metadata indexing | PostgreSQL schema + inbox ingestion | Needs real DICOM fixtures |
+| Metadata indexing | PostgreSQL schema + inbox ingestion | Synthetic STOW indexing CI passed; DIMSE inbox still unverified |
 | Immutable storage + SHA-256 | Content-addressed filesystem files | Unit tests supplied |
-| QIDO-RS studies/series/instances | Query endpoints | Protocol conformance tests required |
-| WADO-RS instance retrieval | multipart/related full DICOM instance | Test with DICOMweb client required |
+| QIDO-RS studies/series/instances | Query endpoints | Synthetic HTTP/PostgreSQL integration passed; conformance tests required |
+| WADO-RS instance retrieval | multipart/related full DICOM instance | Synthetic byte-for-byte retrieval CI passed; client tests required |
 | WADO-RS metadata | Selected attributes (subset) | Not yet viewer-conformant |
-| STOW-RS | multipart/related application/dicom | Partial STOW status semantics |
+| STOW-RS | multipart/related application/dicom | Synthetic multipart ingest CI passed; partial STOW status semantics |
 | OHIF rendering | **NOT IMPLEMENTED / NOT VERIFIED** | Requires complete metadata/frames and viewer config |
-| Duplicate and corruption handling | UID collision reject + storage checksum | Concurrency tests required |
-| AE registry | PostgreSQL CRUD (protected HTTP API) | Integration test required |
+| Duplicate and corruption handling | UID collision reject + storage checksum | Unit tests + synthetic UID collision passed; concurrency tests required |
+| AE registry | PostgreSQL CRUD (protected HTTP API) | Synthetic HTTP/PostgreSQL integration passed |
 | C-FIND/C-MOVE/C-GET SCU | Native addon adapter to allowlisted registered AE | DICOM simulator tests required |
 | C-FIND/C-MOVE/C-GET SCP | **NOT IMPLEMENTED** | Design + native adapter required |
 | DICOM Modality Worklist SCP | **NOT IMPLEMENTED** | Native MWL support not available in selected addon |
 | DICOM routing | **NOT IMPLEMENTED** | Job queue, policy, audit required |
 | Backup/restore, TLS, RBAC, consent | **NOT IMPLEMENTED** | Needed before clinical use |
+
+## Verified automated evidence
+
+- GitHub Actions: https://github.com/bofandra/pacs/actions/runs/43686423562 (commit a6a41a81)
+- Node.js syntax check, unit tests, PostgreSQL migration, synthetic Part 10 DICOM parsing, HTTP STOW/QIDO/WADO roundtrip, checksum, duplicate/UID collision rejection and AE registry passed.
+- **Not verified:** C-STORE/C-ECHO from a DICOM simulator, C-FIND/MOVE/GET SCU across a network, DICOM SCP query/retrieve, MWL, OHIF or diagnostic rendering.
+
+Backlog: [DIMSE SCP](https://github.com/bofandra/pacs/issues/2), [MWL](https://github.com/bofandra/pacs/issues/3), [routing](https://github.com/bofandra/pacs/issues/4), [OHIF](https://github.com/bofandra/pacs/issues/5).
 
 ## Safety requirements before clinical pilot
 

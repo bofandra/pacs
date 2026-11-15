@@ -67,7 +67,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/dimse/find \
  -d '{"aet":"SIMULATOR","studyUID":"1.2.840.10008.1.2.3"}'
 ```
 
-`npm test` runs small unit tests. CI performs syntax checks but **does not** prove DIMSE, PostgreSQL, OHIF, conformance, or clinical safety.
+`npm test` runs small unit tests. CI runs syntax checks, unit tests and a synthetic DICOM STOW/QIDO/WADO roundtrip against PostgreSQL. It **does not** prove DIMSE interoperability, OHIF, complete DICOM conformance, or clinical safety.
 
 ## Scope / architecture
 
