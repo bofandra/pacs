@@ -184,6 +184,34 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
       const ruleDisable=await request('/api/v1/routing/rules/'+rule.id,{
         method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:false})});
       assert.equal(ruleDisable.status,200);
+
+      // Disabled rules create no automatic jobs; manual enqueue is explicit and idempotent.
+      const noRoute={study:uid(),series:uid(),instance:uid()};
+      const noRoutePart=buildDicomMultipart(makeSyntheticDicom(noRoute),'disabled-rule-boundary');
+      const nr=await request('/dicomweb/studies',{
+        method:'POST',headers:{'Content-Type':noRoutePart.type},body:noRoutePart.data});
+      assert.equal(nr.status,200);
+      const neverAuto=(await (await request('/api/v1/delivery/jobs')).json())
+        .filter(job=>job.instance_uid===noRoute.instance);
+      assert.equal(neverAuto.length,0);
+      const enqueueBody={instanceUID:noRoute.instance,destinationAet:'SIMULATOR'};
+      const sendManual=()=>request('/api/v1/delivery/jobs',{
+        method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(enqueueBody)});
+      const firstManual=await sendManual();
+      assert.equal(firstManual.status,202);
+      const firstJob=await firstManual.json();
+      const secondManual=await sendManual();
+      assert.equal((await secondManual.json()).id,firstJob.id);
+      const disableAe=await request('/api/v1/aes/SIMULATOR',{method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({host:'127.0.0.1',port:11114,enabled:false})});
+      assert.equal(disableAe.status,200);
+      assert.equal(await processDeliveryJob(catalog,async()=>{throw Error('must never send')}),null);
+      const enableAe=await request('/api/v1/aes/SIMULATOR',{method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({host:'127.0.0.1',port:11114,enabled:true})});
+      assert.equal(enableAe.status,200);
+      assert.equal((await processDeliveryJob(catalog,async()=>{})).status,'succeeded');
     } finally {await catalog.close();}
     assert.equal((await fetch(base+'/dicomweb/studies')).status,401);
   } finally {
