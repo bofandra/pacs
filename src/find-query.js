@@ -17,13 +17,20 @@ const keySets = {
     'SOPInstanceUID','InstanceNumber','PatientID'])
 };
 const MAX_FIND_RESULTS = 100;
-function scalar(value) {
+function scalar(value, key='value') {
   if(value == null) return '';
   if(Array.isArray(value)) {
     if(value.length > 1) throw new FindQueryError('Multiple-valued matching not supported');
-    return scalar(value[0]);
+    return scalar(value[0],key);
   }
-  if(typeof value !== 'string' && typeof value !== 'number') throw new FindQueryError('Invalid C-FIND matching value');
+  if(typeof value==='object' && !Array.isArray(value)) {
+    // dcmjs represents PN values as { Alphabetic: ... } in some versions.
+    if(Object.hasOwn(value,'Alphabetic')) return scalar(value.Alphabetic,key);
+    if(Object.hasOwn(value,'Value')) return scalar(value.Value,key);
+    if(Object.keys(value).length===0) return '';
+  }
+  if(typeof value !== 'string' && typeof value !== 'number')
+    throw new FindQueryError('Invalid C-FIND matching value type for '+key);
   const s=String(value).replace(/\u0000+$/g,'').trim();
   if(s.length > 128) throw new FindQueryError('C-FIND matching value too long');
   return s;
@@ -35,7 +42,7 @@ export function normalizeFind(input) {
   const normalized={QueryRetrieveLevel:level};
   for(const [key,value] of Object.entries(input)) {
     if(key==='QueryRetrieveLevel') continue;
-    const str=scalar(value);
+    const str=scalar(value,key);
     if(str && !keySets[level].has(key)) throw new FindQueryError('Unsupported matching key: '+key);
     if(str) normalized[key]=str;
   }
