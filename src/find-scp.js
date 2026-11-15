@@ -92,6 +92,7 @@ export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSend
         callback(rejected);
         return;
       }
+      const responses=[];
       const response=(data)=>{
         const item=CMoveResponse.fromRequest(request);
         item.setStatus(data.status);
@@ -102,7 +103,7 @@ export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSend
         if(data.failedUIDs?.length) {
           item.setDataset(new Dataset({FailedSOPInstanceUIDList:data.failedUIDs.join('\\')}));
         }
-        callback(item);
+        responses.push(item);
       };
       try {
         const dataset=request.getDataset()?.getElements() ?? {};
@@ -112,14 +113,18 @@ export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSend
           onProgress:response
         });
         response(result);
+        callback(responses);
       } catch(error) {
         // Log only internal error category/status, never the request dataset.
         console.warn('C-MOVE rejected',error instanceof MoveRequestError
           ? error.message : 'INTERNAL',error?.status??0);
         // Never expose database detail or raw clinical metadata over the wire.
-        response({status:error instanceof MoveRequestError
-          ?error.status:MoveStatus.SuboperationsFailed,
-          completed:0,failed:0,remaining:0,warnings:0});
+        const failed=CMoveResponse.fromRequest(request);
+        failed.setStatus(error instanceof MoveRequestError
+          ?error.status:MoveStatus.SuboperationsFailed);
+        failed.setRemaining(0);failed.setCompleted(0);
+        failed.setFailures(0);failed.setWarnings(0);
+        callback(failed);
       }
     }
     async cGetRequest(request,callback) {
@@ -129,6 +134,7 @@ export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSend
         callback(rejected);
         return;
       }
+      const responses=[];
       const report=data=>{
         const response=CGetResponse.fromRequest(request);
         response.setStatus(data.status);
@@ -138,7 +144,7 @@ export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSend
         response.setWarnings(data.warnings??0);
         if(data.failedUIDs?.length)
           response.setDataset(new Dataset({FailedSOPInstanceUIDList:data.failedUIDs.join('\\')}));
-        callback(response);
+        responses.push(response);
       };
       try {
         const dataset=request.getDataset()?.getElements()??{};
@@ -148,10 +154,17 @@ export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSend
           onProgress:report
         });
         report(result);
+        // The dcmjs-dimse asynchronous callback is single-shot. Deliver all pending
+        // counters and the terminal response together in protocol order.
+        callback(responses);
       }catch(error) {
         // Do not expose patient identifiers or raw SQL errors in DIMSE responses.
         console.warn('C-GET operation',error instanceof GetRequestError?error.status:'INTERNAL');
-        report({status:error instanceof GetRequestError?error.status:GetStatus.OutOfResources});
+        const failed=CGetResponse.fromRequest(request);
+        failed.setStatus(error instanceof GetRequestError?error.status:GetStatus.OutOfResources);
+        failed.setRemaining(0);failed.setCompleted(0);
+        failed.setFailures(0);failed.setWarnings(0);
+        callback(failed);
       }
     }
     associationReleaseRequested(){this.sendAssociationReleaseResponse();}
