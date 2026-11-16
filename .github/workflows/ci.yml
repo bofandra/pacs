@@ -1,0 +1,44 @@
+name: PACS prototype checks
+on:
+  push:
+  pull_request:
+jobs:
+  node-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: pacs
+          POSTGRES_USER: pacs
+          POSTGRES_PASSWORD: pacs_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pacs -d pacs"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      PACS_INTEGRATION: '1'
+      PACS_DCMTK: '1'
+      DATABASE_URL: postgres://pacs:pacs_test_only@127.0.0.1:5432/pacs
+      PACS_STORAGE_ROOT: ./data/objects
+      API_TOKEN: test-only-strong-token-not-for-clinical-use
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install JS dependencies without native build scripts
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Syntax check
+        run: npm run check
+      - name: Initialize PostgreSQL schema
+        run: node src/migrate.js
+      - name: Install DCMTK for independent DIMSE interoperability checks
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq dcmtk
+      - name: Unit and HTTP/PostgreSQL integration tests
+        run: npm test

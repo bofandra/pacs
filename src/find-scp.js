@@ -1,0 +1,220 @@
+// Experimental Study Root C-FIND SCP using dcmjs-dimse and the PACS PostgreSQL catalog.
+// Explicit opt-in, loopback-only listener. Not for patient data or clinical use.
+import net from 'node:net';
+import dimsePackage from 'dcmjs-dimse';
+import { config } from './config.js';
+import { PacsCatalog } from './catalog.js';
+import { findStudyRoot, FindQueryError } from './find-query.js';
+import { executeMove, MoveRequestError, MoveStatus } from './move-scp.js';
+import { executeGet, GetRequestError, GetStatus, canAcceptStorageContext } from './get-scp.js';
+import { storeOnGetAssociation } from './get-transport.js';
+
+const { Dataset, Scp, Server }=dimsePackage;
+const { CEchoResponse, CFindResponse, CMoveResponse, CGetResponse }=dimsePackage.responses;
+const { Status, SopClass, TransferSyntax, PresentationContextResult,
+  RejectResult,RejectSource,RejectReason }=dimsePackage.constants;
+const supportedSyntaxes=new Set([
+  TransferSyntax.ImplicitVRLittleEndian,TransferSyntax.ExplicitVRLittleEndian
+]);
+const sanitizeIP = address => (address||'').replace(/^::ffff:/,'');
+function matchPeer(peers,called,calling,ip,ownAet) {
+  if(called!==ownAet) return {ok:false,reason:RejectReason.CalledAeNotRecognized};
+  const peer=peers.get(calling);
+  if(!peer || !peer.enabled || sanitizeIP(peer.host)!==sanitizeIP(ip))
+    return {ok:false,reason:RejectReason.CallingAeNotRecognized};
+  return {ok:true};
+}
+export function createFindScpClass({catalog,peers,aet,moveEnabled=false,moveSender,getEnabled=false,getSender}) {
+  return class PacsFindScp extends Scp {
+    associationRequested(association) {
+      const called=association.getCalledAeTitle().trim();
+      const calling=association.getCallingAeTitle().trim();
+      const decision=matchPeer(peers,called,calling,this.socket.remoteAddress,aet);
+      if(!decision.ok) {
+        this.sendAssociationReject(RejectResult.Permanent,RejectSource.ServiceUser,decision.reason);
+        return;
+      }
+      for(const proposed of association.getPresentationContexts()){
+        const ctx=association.getPresentationContext(proposed.id);
+        const abstract=ctx.getAbstractSyntaxUid();
+        if(getEnabled && canAcceptStorageContext(ctx)) {
+          // The association REQUESTER must have proposed C-STORE SCP role.
+          // It remains SCP=1/SCU=0 in the association acceptance response.
+          ctx.setUserRole(false);
+          ctx.setProviderRole(true);
+        } else if(abstract!==SopClass.Verification &&
+           abstract!==SopClass.StudyRootQueryRetrieveInformationModelFind &&
+           !(moveEnabled && abstract===SopClass.StudyRootQueryRetrieveInformationModelMove) &&
+           !(getEnabled && abstract===SopClass.StudyRootQueryRetrieveInformationModelGet)) {
+          ctx.setResult(PresentationContextResult.RejectAbstractSyntaxNotSupported);
+          continue;
+        }
+        const syntax=ctx.getTransferSyntaxUids().find(x=>supportedSyntaxes.has(x));
+        if(syntax) ctx.setResult(PresentationContextResult.Accept,syntax);
+        else ctx.setResult(PresentationContextResult.RejectTransferSyntaxesNotSupported);
+      }
+      this.sendAssociationAccept();
+    }
+    cEchoRequest(request,callback) {
+      const response=CEchoResponse.fromRequest(request);
+      response.setStatus(Status.Success);
+      callback(response);
+    }
+    async cFindRequest(request,callback) {
+      try {
+        const dataset=request.getDataset()?.getElements() ?? {};
+        const rows=await findStudyRoot(catalog.pool,dataset);
+        const responses=rows.map(row=>{
+          const response=CFindResponse.fromRequest(request);
+          response.setStatus(Status.Pending);
+          response.setDataset(new Dataset(row));
+          return response;
+        });
+        const complete=CFindResponse.fromRequest(request);
+        complete.setStatus(Status.Success);
+        responses.push(complete);
+        callback(responses);
+      } catch(error) {
+        // Never log patient identifiers or raw datasets; numeric database codes only.
+        console.warn('C-FIND rejected',error instanceof FindQueryError
+          ? error.message : /^[A-Z0-9]{5}$/.test(error?.code??'')?error.code:'INTERNAL');
+        const response=CFindResponse.fromRequest(request);
+        response.setStatus(error instanceof FindQueryError && error.code==='TOO_MANY_RESULTS'
+          ?Status.OutOfResourcesNumberOfMatches:Status.ProcessingFailure);
+        response.setErrorComment('C-FIND query rejected or unavailable');
+        callback(response);
+      }
+    }
+    async cMoveRequest(request,callback) {
+      if(!moveEnabled) {
+        const rejected=CMoveResponse.fromRequest(request);
+        rejected.setStatus(MoveStatus.InvalidIdentifier);
+        callback(rejected);
+        return;
+      }
+      const responses=[];
+      const response=(data)=>{
+        const item=CMoveResponse.fromRequest(request);
+        item.setStatus(data.status);
+        item.setRemaining(data.remaining??0);
+        item.setCompleted(data.completed??0);
+        item.setFailures(data.failed??0);
+        item.setWarnings(data.warnings??0);
+        if(data.failedUIDs?.length) {
+          item.setDataset(new Dataset({FailedSOPInstanceUIDList:data.failedUIDs.join('\\')}));
+        }
+        responses.push(item);
+      };
+      try {
+        const dataset=request.getDataset()?.getElements() ?? {};
+        const destination=request.getCommandDataset().getElement('MoveDestination');
+        const result=await executeMove({
+          dataset,destinationAet:destination,catalog,peers,aet,send:moveSender,
+          onProgress:response
+        });
+        response(result);
+        callback(responses);
+      } catch(error) {
+        // Log only internal error category/status, never the request dataset.
+        console.warn('C-MOVE rejected',error instanceof MoveRequestError
+          ? error.message : 'INTERNAL',error?.status??0);
+        // Never expose database detail or raw clinical metadata over the wire.
+        const failed=CMoveResponse.fromRequest(request);
+        failed.setStatus(error instanceof MoveRequestError
+          ?error.status:MoveStatus.SuboperationsFailed);
+        failed.setRemaining(0);failed.setCompleted(0);
+        failed.setFailures(0);failed.setWarnings(0);
+        callback(failed);
+      }
+    }
+    async cGetRequest(request,callback) {
+      if(!getEnabled) {
+        const rejected=CGetResponse.fromRequest(request);
+        rejected.setStatus(GetStatus.InvalidIdentifier);
+        callback(rejected);
+        return;
+      }
+      const responses=[];
+      const report=data=>{
+        const response=CGetResponse.fromRequest(request);
+        response.setStatus(data.status);
+        response.setRemaining(data.remaining??0);
+        response.setCompleted(data.completed??0);
+        response.setFailures(data.failed??0);
+        response.setWarnings(data.warnings??0);
+        if(data.failedUIDs?.length)
+          response.setDataset(new Dataset({FailedSOPInstanceUIDList:data.failedUIDs.join('\\')}));
+        responses.push(response);
+      };
+      try {
+        const dataset=request.getDataset()?.getElements()??{};
+        const result=await executeGet({
+          dataset,catalog,association:this.association,
+          send:({bytes,instance})=>(getSender??((payload)=>storeOnGetAssociation(this,payload)))({bytes,instance}),
+          onProgress:report
+        });
+        report(result);
+        // The dcmjs-dimse asynchronous callback is single-shot. Deliver all pending
+        // counters and the terminal response together in protocol order.
+        callback(responses);
+      }catch(error) {
+        // Do not expose patient identifiers or raw SQL errors in DIMSE responses.
+        console.warn('C-GET operation',error instanceof GetRequestError?error.status:'INTERNAL');
+        const failed=CGetResponse.fromRequest(request);
+        failed.setStatus(error instanceof GetRequestError?error.status:GetStatus.OutOfResources);
+        failed.setRemaining(0);failed.setCompleted(0);
+        failed.setFailures(0);failed.setWarnings(0);
+        callback(failed);
+      }
+    }
+    associationReleaseRequested(){this.sendAssociationReleaseResponse();}
+  };
+}
+// dcmjs-dimse Server.listen() does not expose a host binding argument.
+// Override only its transport binding to avoid accidentally listening on 0.0.0.0.
+export class LoopbackDimseServer extends Server {
+  listen(port,opts={}) {
+    this.server=net.createServer(socket=>{
+      const client=new this.scp.class(socket,opts);
+      client.connected=true;
+      client.on('close',()=>{this.statistics.addFromOtherStatistics(client.getStatistics());});
+      client.on('networkError',()=>{client.close();});
+      this.clients.push(client);
+      this.clients=this.clients.filter(item=>item.connected);
+    });
+    this.server.on('listening',()=>this.emit('listening'));
+    this.server.on('error',err=>this.emit('networkError',err));
+    this.server.listen(port,'127.0.0.1');
+  }
+}
+export async function startFindScp() {
+  if(process.env.PACS_FIND_EXPERIMENTAL!=='1')
+    throw new Error('PACS_FIND_EXPERIMENTAL=1 must be set explicitly');
+  const conf=config();
+  const port=Number(process.env.PACS_FIND_PORT??11115);
+  if(!Number.isInteger(port)||port<1024||port>65535) throw new Error('Invalid PACS_FIND_PORT');
+  if(!/^[A-Z0-9_-]{1,16}$/.test(conf.aet)) throw new Error('Invalid PACS_AET');
+  const catalog=new PacsCatalog(conf);
+  try {
+    const nodes=await catalog.nodes();
+    const peers=new Map(nodes.filter(n=>n.enabled && net.isIP(n.host)===4)
+      .map(n=>[n.aet,n]));
+    const moveEnabled=process.env.PACS_MOVE_EXPERIMENTAL==='1';
+    const getEnabled=process.env.PACS_GET_EXPERIMENTAL==='1';
+    const Klass=createFindScpClass({catalog,peers,aet:conf.aet,moveEnabled,getEnabled});
+    const server=new LoopbackDimseServer(Klass);
+    server.on('networkError',()=>{console.error('DICOM C-FIND SCP network error');});
+    server.listen(port,{associationTimeout:15000,pduTimeout:30000,logCommandDatasets:false,logDatasets:false});
+    console.log('Experimental Query SCP listening at 127.0.0.1:'+port+
+      ' with '+peers.size+' enabled AE peers; C-MOVE '+(moveEnabled?'enabled':'disabled')+
+      '; C-GET '+(getEnabled?'enabled':'disabled'));
+    const close=async()=>{server.close();await catalog.close();};
+    return {server,catalog,close};
+  } catch(error) {await catalog.close();throw error;}
+}
+if(process.argv[1] && import.meta.url===new URL('file://'+process.argv[1]).href) {
+  const instance=await startFindScp();
+  const shutdown=()=>instance.close().finally(()=>process.exit(0));
+  process.once('SIGINT',shutdown);
+  process.once('SIGTERM',shutdown);
+}
