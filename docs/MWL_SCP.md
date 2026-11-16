@@ -26,7 +26,9 @@ RIS/SIMRS -> HTTP Bearer POST /api/v1/ris/worklist-orders
  (read-only identity comparison; never automatically merge patient records)
 ```
 
-Supported MWL response includes PatientName, PatientID, IssuerOfPatientID, PatientBirthDate, PatientSex, AccessionNumber, StudyInstanceUID, RequestedProcedureID/Description, SpecificCharacterSet, and a **one-item ScheduledProcedureStepSequence** with station AET, modality, local date/time, SPS ID and description.
+Supported MWL response includes PatientName, PatientID, IssuerOfPatientID, PatientBirthDate, PatientSex, AccessionNumber, IssuerOfAccessionNumberSequence, StudyInstanceUID, RequestedProcedureID/Description, SpecificCharacterSet, and a **one-item ScheduledProcedureStepSequence** with station AET, modality, local date/time, SPS ID and description.
+
+When a client supplies both date and time ranges, the SCP matches a continuous interval across days in the scheduled station's local time. Separate date-only and time-only queries use their own filters.
 
 ### Enable
 
@@ -112,7 +114,7 @@ curl -H "Authorization: Bearer $API_TOKEN" \
   http://127.0.0.1:3000/api/v1/ris/worklist-orders/1/reconciliation
 ```
 
-Statuses: `not_received`, `mismatch`, `insufficient_evidence`, `identity_consistent`. The last status **does not constitute a confirmed identity match**. The original DICOM must include `IssuerOfPatientID (0010,0021)` to establish the patient-ID issuer evidence. Even when all other fields agree, the DICOM `IssuerOfAccessionNumberSequence` has not been parsed, so `accessionIssuerVerified=false`. No patient identity is automatically merged.
+Statuses include `not_received`, `mismatch`, `insufficient_evidence`, and `identity_consistent`. The result is advisory. DICOM `IssuerOfPatientID (0010,0021)` provides patient-ID issuer evidence. For newly indexed objects, the Local Namespace Entity ID in `IssuerOfAccessionNumberSequence (0008,0051)` can establish accession issuer evidence. A conflicting local issuer produces a mismatch. Missing sequences, universal-ID-only sequences, and older index rows without this metadata leave `accessionIssuerVerified` false.
 
 ### Verified and missing
 
@@ -120,6 +122,7 @@ Statuses: `not_received`, `mismatch`, `insufficient_evidence`, `identity_consist
 - [x] Independent DCMTK `findscu -W` query, including modality/station/issuer scoping.
 - [x] Cancelled orders excluded; duplicate order is idempotent; changed identity rejected.
 - [x] Synthetic RIS order → worklist → DICOM ingest → advisory reconciliation; issuer mismatch is explicitly flagged.
+- [x] DCMTK queries a date/time interval across midnight. Synthetic objects cover matching, conflicting, and missing accession issuer evidence.
 - [ ] Interoperability with real CT/MR/CR/DR console vendors.
 - [ ] Full DICOM PS3.4 K.6 key set, code sequences and complete date/time matching semantics.
 - [ ] Production authorization/TLS, multi-site station access scopes, HL7 ORM/RIS connector, order amendments, audit review, downtime continuity.

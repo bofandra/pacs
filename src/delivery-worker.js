@@ -3,14 +3,14 @@ import path from 'node:path';
 import { config } from './config.js';
 import { PacsCatalog } from './catalog.js';
 import { claimJob,finishJob } from './routing.js';
-import { sendDicomNative } from './delivery-transport.js';
+import { sendDicomDelivery } from './delivery-transport.js';
 
 export function safeDeliveryError(error) {
-  // Never persist raw DIMSE errors: native log output may contain patient identifiers.
+  // Never persist raw DIMSE errors, which may contain patient identifiers.
   const codes=new Set(['DIMSE_TIMEOUT','DIMSE_PROCESS_ERROR','DIMSE_ASSOCIATION_FAILED','AE_DISABLED','CHECKSUM_MISMATCH']);
   return codes.has(error?.code)?error.code:'DELIVERY_FAILED';
 }
-export async function processDeliveryJob(catalog,send=sendDicomNative) {
+export async function processDeliveryJob(catalog,send=sendDicomDelivery) {
   const job=await claimJob(catalog.pool);
   if(!job) return null;
   const conf=catalog.conf;

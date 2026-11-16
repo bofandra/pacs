@@ -18,6 +18,17 @@ const UID_RE = /^[0-9]+(?:\.[0-9]+)*$/;
 export function validUID(value) {
   return typeof value === 'string' && value.length <= 64 && UID_RE.test(value);
 }
+export function validDicomDate(value) {
+  if (typeof value !== 'string' || !/^\d{8}$/.test(value)) return false;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(4, 6));
+  const day = Number(value.slice(6, 8));
+  if (year === 0) return false;
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day;
+}
 export function element(vr, value) {
   if (value === undefined || value === null || value === '') return { vr };
   if (vr === 'PN') return { vr, Value: [{ Alphabetic: String(value) }] };
@@ -35,12 +46,22 @@ export function parseDicom(buffer) {
     // Stop before PixelData to avoid traversing large encapsulated payloads.
     ds = dicomParser.parseDicom(new Uint8Array(buffer), { untilTag: 'x7fe00010' });
   } catch (error) { throw new Error(`Unable to parse DICOM: ${error.message}`); }
-  const get = tag => (ds.string(('x' + tag).toLowerCase()) ?? '').replace(/\u0000+$/g, '').trim();
+  const get = (tag,dataset=ds) => (dataset.string(('x' + tag).toLowerCase()) ?? '').replace(/\u0000+$/g, '').trim();
   const meta = {};
   for (const [tag, [,vr]] of Object.entries(TAGS)) {
     const binary = vr === 'US' ? ds.uint16('x' + tag) : undefined;
     const value = binary ?? get(tag);
     if (value !== '') meta[tag] = element(vr, value);
+  }
+  const accessionIssuers=ds.elements.x00080051?.items;
+  if(accessionIssuers?.length===1&&accessionIssuers[0].dataSet){
+    const authority=accessionIssuers[0].dataSet;
+    const attributes={};
+    for(const [tag,vr] of [['00400031','UT'],['00400032','UT'],['00400033','CS']]){
+      const value=get(tag,authority);
+      if(value)attributes[tag]=element(vr,value);
+    }
+    if(Object.keys(attributes).length)meta['00080051']={vr:'SQ',Value:[attributes]};
   }
   const transferSyntax = get('00020010');
   if (transferSyntax) meta['00020010'] = element('UI', transferSyntax);

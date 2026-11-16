@@ -2,8 +2,12 @@ import {getWorklistOrder} from './mwl-orders.js';
 
 // Advisory comparison of imaging data against a worklist order.
 // NEVER automatically link/merge patient identities based on this comparison.
-// The Issuer of Accession Number Sequence is not currently parsed from DICOM,
-// so even fully consistent values are not a formally confirmed identity match.
+// Only a DICOM Local Namespace Entity ID can be compared to the RIS issuer string.
+function compareIssuers(received,expected) {
+  if(received.some(value=>value!==null&&value!==expected))return false;
+  if(received.length>0&&received.length<=100&&received.every(value=>value===expected))return true;
+  return null;
+}
 export async function reconcileWorklistOrder(pool,id) {
   const order=await getWorklistOrder(pool,id);
   const study=(await pool.query(
@@ -16,6 +20,7 @@ export async function reconcileWorklistOrder(pool,id) {
     patientIdMatches:null,
     issuerOfPatientIdMatches:null,
     accessionNumberMatches:null,
+    accessionIssuerMatches:null,
     accessionIssuerVerified:false,
     instanceCount:0,
     automaticPatientMerge:false
@@ -29,13 +34,15 @@ export async function reconcileWorklistOrder(pool,id) {
   summary.accessionNumberMatches=study.accession_number===order.accession_number;
   // Bound work avoids unbounded DICOM metadata reads. Insufficient evidence
   // when >100 instances have not all been evaluated.
-  const issuers=rows.map(r=>r.metadata?.['00100021']?.Value?.[0]??null);
-  if(issuers.some(x=>x!==null && x!==order.issuer_of_patient_id))
-    summary.issuerOfPatientIdMatches=false;
-  else if(rows.length>0&&rows.length<=100&&issuers.every(x=>x===order.issuer_of_patient_id))
-    summary.issuerOfPatientIdMatches=true;
+  summary.issuerOfPatientIdMatches=compareIssuers(
+    rows.map(row=>row.metadata?.['00100021']?.Value?.[0]??null),order.issuer_of_patient_id);
+  summary.accessionIssuerMatches=compareIssuers(
+    rows.map(row=>row.metadata?.['00080051']?.Value?.[0]?.['00400031']?.Value?.[0]??null),
+    order.accession_issuer);
+  summary.accessionIssuerVerified=summary.accessionIssuerMatches===true;
   if(!summary.patientIdMatches||!summary.accessionNumberMatches ||
-     summary.issuerOfPatientIdMatches===false)summary.status='mismatch';
+     summary.issuerOfPatientIdMatches===false||summary.accessionIssuerMatches===false)
+    summary.status='mismatch';
   else if(summary.issuerOfPatientIdMatches===true)
     summary.status='identity_consistent';
   else summary.status='insufficient_evidence';

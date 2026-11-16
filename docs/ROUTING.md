@@ -8,13 +8,13 @@ This implements an original Node.js/PostgreSQL routing control plane and deliver
 
 ```text
 New C-STORE / STOW ingest
-    -> parse and persist original DICOM
+    -> parse and persist Part 10 DICOM
     -> transaction inserts new instance index
     -> enabled routing_rules match modality (e.g. CR)
     -> delivery_jobs created idempotently per (instance_uid, destination_aet)
     -> delivery worker leases one job (SKIP LOCKED)
     -> checks SHA-256 and stages one DICOM file in an isolated temp directory
-    -> native C-STORE SCU subprocess sends to registered AE
+    -> C-STORE SCU subprocess sends to registered AE and checks its response
     -> success, queued retry with backoff, or dead_letter + audit event
 ```
 
@@ -30,7 +30,7 @@ node --env-file=.env src/server.js
 node --env-file=.env src/delivery-worker.js
 ```
 
-Native delivery requires a compatible `dicom-dimse-native` binary. The worker reports `DIMSE_PROCESS_ERROR` / `DIMSE_ASSOCIATION_FAILED` on failures and retries. CI uses an injected fake transport rather than an external DICOM listener.
+The delivery subprocess uses dcmjs-dimse and acknowledges a job after a C-STORE Success response. The previous native addon returned success even after a receiver rejected an instance. Integration tests exercise delivery to DCMTK storescp and a receiver that returns failure before accepting the retry.
 
 All API calls below require the development-only Bearer token:
 
@@ -96,15 +96,15 @@ Terminal states are never silently retried. Disabling the destination AE prevent
 
 1. Install DCMTK in an isolated test environment. Start `storescp -aet TEST_SCP -od ./test-received 11114` and ensure its listener is reachable **only** from the PACS worker.
 2. Enable the routing rule for CR.
-3. Send an **anonymized/synthetic** CR file to native PACS C-STORE SCP using `storescu -aet SIMULATOR -aec PACS_NATIVE 127.0.0.1 11112 synthetic-cr.dcm`; verify the inbox worker indexed it and the delivery worker reports success.
-4. Compare SOP Instance UID and SHA-256 of source and destination. Review logs and DB delivery state.
+3. Send a **synthetic** CR file to the PACS C-STORE SCP using `storescu -aet SIMULATOR -aec PACS_NATIVE 127.0.0.1 11112 synthetic-cr.dcm`; verify QIDO-RS returns the indexed object and the delivery worker reports success.
+4. Compare SOP Instance UID and dataset contents of source and destination. The receiver may reconstruct the Part 10 file header. Review logs and DB delivery state.
 5. Shut down destination to test retries and dead-letter handling; restore and use manual retry.
-6. Document supported Transfer Syntaxes, presentation contexts, AEs and rejection paths. Native adapter compatibility must be verified on the host OS. **Passing GitHub Actions alone is not evidence of DICOM network interoperability.**
+6. Document supported Transfer Syntaxes, presentation contexts, AEs and rejection paths. Validate the actual receiving nodes and network controls independently of the loopback test.
 
 ## Current limitations
 
-- Native process isolation and callback completion need DCMTK end-to-end validation.
+- Routing matches modality and uses registered AEs. Source-AE matching, operator review controls and network egress enforcement remain open.
 - No TLS DIMSE, no caller AE identity enforcement at transport, no per-study routing policy, no cross-site consent checks.
 - Rule modification affects future ingestions; old queued jobs are not canceled.
 - No automatic retention/backup or replay ledger beyond one delivery row per instance/destination.
-- The native child uses a single staged DICOM file per delivery for isolation and idempotency. This has throughput overhead.
+- The child uses a single staged DICOM file and one association per delivery. This has throughput overhead.

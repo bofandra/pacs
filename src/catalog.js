@@ -64,8 +64,15 @@ export class PacsCatalog {
     const offset = Math.min(Math.max(Number(q.offset) || 0,0),100000);
     const args = [];
     const conditions=[];
-    for (const [key,field] of [['PatientID','patient_id'],['StudyInstanceUID','study_uid'],['AccessionNumber','accession_number'],['StudyDate','study_date']]) {
-      if (q[key]) { args.push(q[key]); conditions.push(`${field}=$${args.length}`); }
+    for (const [keyword,tag,field] of [
+      ['PatientID','00100020','patient_id'],
+      ['StudyInstanceUID','0020000D','study_uid'],
+      ['AccessionNumber','00080050','accession_number'],
+      ['StudyDate','00080020','study_date']
+    ]) {
+      for (const value of new Set([q[keyword],q[tag],q[tag.toLowerCase()]])) {
+        if(value) {args.push(value);conditions.push(`${field}=$${args.length}`);}
+      }
     }
     args.push(limit,offset);
     const sql = `SELECT s.*, (SELECT count(*)::int FROM series x WHERE x.study_uid=s.study_uid) AS series_count,

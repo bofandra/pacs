@@ -1,6 +1,6 @@
 // OHIF v3 DICOMweb data source (development template only).
-// Serve this file as the OHIF configuration after deploying an authenticated
-// SAME-ORIGIN reverse proxy in front of /dicomweb. Do not place API_TOKEN here.
+// Served by the loopback lab in src/ohif-dev.js. A shared deployment requires
+// its own authenticated, same-origin reverse proxy. Never place API_TOKEN here.
 window.config = {
   routerBasename: '/',
   extensions: [],

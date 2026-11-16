@@ -1,5 +1,7 @@
 // DICOM Modality Worklist Information Model – FIND (1.2.840.10008.5.1.4.31)
 // Prototype matching subset of DICOM PS3.4 K.6. Strict per-calling-AET scoping.
+import { validDicomDate } from './dicom.js';
+
 export class MwlQueryError extends Error {
   constructor(message,code='INVALID_MWL_QUERY'){super(message);this.code=code;}
 }
@@ -35,28 +37,31 @@ function scalar(value,key){
 }
 function dateBounds(value,key){
   if(!value)return null;
-  if(/^\d{8}$/.test(value))return [value,value];
+  if(validDicomDate(value))return [value,value];
   const m=/^(\d{8})?-(\d{8})?$/.exec(value);
-  if(!m||(m[1]===undefined&&m[2]===undefined))
+  if(!m||(!m[1]&&!m[2])||[m[1],m[2]].some(bound=>bound&&!validDicomDate(bound)))
     throw new MwlQueryError('Invalid '+key+' range');
   if(m[1]&&m[2]&&m[1]>m[2])throw new MwlQueryError('Reversed '+key+' range');
   return [m[1]??null,m[2]??null];
 }
+function timeEndpoint(value,endOfPrecision=false){
+  const padded=value.padEnd(6,'0');
+  if(Number(padded.slice(0,2))>23||Number(padded.slice(2,4))>59||Number(padded.slice(4,6))>59)
+    throw new MwlQueryError('Invalid Scheduled Procedure Step Start Time');
+  if(endOfPrecision&&value.length===2)return value+'5959';
+  if(endOfPrecision&&value.length===4)return value+'59';
+  return padded;
+}
 function timeBounds(value){
   if(!value)return null;
   if(/^\d{2}(?:\d{2}(?:\d{2})?)?$/.test(value)){
-    const padded=value.padEnd(6,'0');
-    if(Number(padded.slice(0,2))>23||Number(padded.slice(2,4))>59||Number(padded.slice(4,6))>59)
-      throw new MwlQueryError('Invalid Scheduled Procedure Step Start Time');
+    const padded=timeEndpoint(value);
     return [padded,padded];
   }
-  const m=/^(\d{2,6})?-(\d{2,6})?$/.exec(value);
+  const m=/^(\d{2}(?:\d{2}(?:\d{2})?)?)?-(\d{2}(?:\d{2}(?:\d{2})?)?)?$/.exec(value);
   if(!m||(!m[1]&&!m[2]))throw new MwlQueryError('Invalid Scheduled Procedure Step Start Time range');
-  const start=m[1]?.padEnd(6,'0')??null;
-  const end=m[2]?.padEnd(6,'9')??null;
-  if((start&&Number(start.slice(0,2))>23)||(end&&Number(end.slice(0,2))>23))
-    throw new MwlQueryError('Invalid Scheduled Procedure Step Start Time');
-  if(start&&end&&start>end)throw new MwlQueryError('Reversed time range');
+  const start=m[1]?timeEndpoint(m[1]):null;
+  const end=m[2]?timeEndpoint(m[2],true):null;
   return [start,end];
 }
 export function normalizeMwlQuery(input,{callingAet}={}) {
@@ -93,6 +98,19 @@ export function normalizeMwlQuery(input,{callingAet}={}) {
     throw new MwlQueryError('Unsupported SpecificCharacterSet');
   keys.dateBounds=dateBounds(keys.ScheduledProcedureStepStartDate,'ScheduledProcedureStepStartDate');
   keys.timeBounds=timeBounds(keys.ScheduledProcedureStepStartTime);
+  const [dateStart,dateEnd]=keys.dateBounds??[];
+  const [timeStart,timeEnd]=keys.timeBounds??[];
+  if(keys.ScheduledProcedureStepStartDate.includes('-')&&keys.ScheduledProcedureStepStartTime.includes('-')){
+    // PS3.4 K.6 treats paired date/time ranges as one continuous interval.
+    keys.scheduleBounds=[
+      dateStart?dateStart+(timeStart??'000000'):null,
+      dateEnd?dateEnd+(timeEnd??'235959'):null
+    ];
+    const [start,end]=keys.scheduleBounds;
+    if(start&&end&&start>end)throw new MwlQueryError('Reversed schedule range');
+  }else if(timeStart&&timeEnd&&timeStart>timeEnd){
+    throw new MwlQueryError('Reversed time range');
+  }
   return keys;
 }
 function like(value){
@@ -128,6 +146,7 @@ export function toMwlDataset(r){
     PatientBirthDate:r.patient_birth_date??'',
     PatientSex:r.patient_sex??'',
     AccessionNumber:r.accession_number,
+    IssuerOfAccessionNumberSequence:[{LocalNamespaceEntityID:r.accession_issuer}],
     StudyInstanceUID:r.study_instance_uid,
     RequestedProcedureID:r.requested_procedure_id,
     RequestedProcedureDescription:r.requested_procedure_description,
@@ -154,8 +173,12 @@ export async function findModalityWorklist(pool,query,options={}) {
   add(where,args,'modality',q.Modality);
   add(where,args,'patient_birth_date',q.PatientBirthDate);
   add(where,args,'patient_sex',q.PatientSex);
-  bounds(where,args,'scheduled_start_date',q.dateBounds);
-  bounds(where,args,'scheduled_start_time',q.timeBounds);
+  if(q.scheduleBounds){
+    bounds(where,args,'(scheduled_start_date || scheduled_start_time)',q.scheduleBounds);
+  }else{
+    bounds(where,args,'scheduled_start_date',q.dateBounds);
+    bounds(where,args,'scheduled_start_time',q.timeBounds);
+  }
   args.push(max+1);
   const sql=`SELECT * FROM ris_worklist_orders WHERE ${where.join(' AND ')}
     ORDER BY scheduled_start_date,scheduled_start_time,id LIMIT $${args.length}`;

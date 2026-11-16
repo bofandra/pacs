@@ -58,6 +58,7 @@ For a SERIES query add `SeriesInstanceUID`; for IMAGE also add `SOPInstanceUID`.
 - Independent DCMTK `movescu` opened a DIMSE association and requested C-MOVE to `DEST_SCP`.
 - Native Node.js Query SCP selected one instance, sent it through `dcmjs-dimse` C-STORE SCU and received DCMTK `storescp` C-STORE Success.
 - Final C-MOVE response was Success, Remaining=0, Completed=1, Failed=0, Warnings=0. The saved instance was parsed and its SOP Instance UID matched.
+- The integration suite transfers two instances to DCMTK and checks both UIDs and Completed=2. A separate receiver rejects one C-STORE and the final response carries Warning, Completed=1, Failed=1 and the failed SOP Instance UID.
 - Unit tests cover invalid identifiers, unknown destination, bounded result cap, pending counters, and partial transport failure warning.
 
 **This is not DICOM PS3.2 Conformance certification.**
@@ -68,7 +69,7 @@ For a SERIES query add `SeriesInstanceUID`; for IMAGE also add `SOPInstanceUID`.
 - **Only IPv4 127.0.0.1 destination**, AE must be enabled and registered before listener startup. No remote hospital network transfer.
 - No C-CANCEL handling, cross-facility access control, transport TLS, throttling, association authorization beyond registered AE/IP, or patient consent policy.
 - One C-STORE association per instance; not efficient for high-volume imaging.
-- Unit tests cover partial errors; only one-instance DCMTK end-to-end success is tested. Multi-instance and network-interruption semantics must be independently verified.
+- The failure test covers an explicit receiver rejection. Transport interruptions, cancellation, and vendor interoperability remain unverified.
 - Warning response may include Failed SOP Instance UID List; conformance and status handling need validation across devices.
 - C-GET SCP is implemented as a separate experimental feature. It uses same-association C-STORE with SCU/SCP Role Selection; see [GET_SCP.md](GET_SCP.md).
 

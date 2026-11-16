@@ -42,7 +42,7 @@ function field(group,element,vr,value) {
   else header.writeUInt16LE(data.length,6);
   return Buffer.concat([header,data]);
 }
-function syntheticStudy(order,instanceSuffix,issuer=order.issuerOfPatientId) {
+function syntheticStudy(order,instanceSuffix,issuer=order.issuerOfPatientId,accessionIssuer=order.accessionIssuer) {
   const sopClass='1.2.840.10008.5.1.4.1.1.2';
   const sopInstance='2.25.654321'+instanceSuffix;
   const series='2.25.789321'+instanceSuffix;
@@ -52,12 +52,21 @@ function syntheticStudy(order,instanceSuffix,issuer=order.issuerOfPatientId) {
     field(2,0x10,'UI','1.2.840.10008.1.2.1'),field(2,0x12,'UI','2.25.1')
   ]);
   const length=Buffer.alloc(4);length.writeUInt32LE(meta.length);
+  let accessionAuthority=Buffer.alloc(0);
+  if(accessionIssuer){
+    const authority=field(0x40,0x0031,'UT',accessionIssuer);
+    const item=Buffer.alloc(8);
+    item.writeUInt16LE(0xfffe,0);item.writeUInt16LE(0xe000,2);
+    item.writeUInt32LE(authority.length,4);
+    accessionAuthority=field(8,0x51,'SQ',Buffer.concat([item,authority]));
+  }
   return Buffer.concat([
     Buffer.alloc(128),Buffer.from('DICM'),
     field(2,0,'UL',length),meta,
     field(8,0x16,'UI',sopClass),field(8,0x18,'UI',sopInstance),
     field(8,0x20,'DA',order.scheduledStartDate),
     field(8,0x50,'SH',order.accessionNumber),
+    accessionAuthority,
     field(8,0x60,'CS',order.modality),
     field(0x10,0x10,'PN',order.patientName),
     field(0x10,0x20,'LO',order.patientId),
@@ -151,6 +160,27 @@ test('RIS scheduling API to DICOM MWL C-FIND, identifier issuer and cancellation
    const noMr=await query(['(0040,0100)[0].Modality=MR','AccessionNumber']);
    assert.ok(!noMr.includes(cancelled.accessionNumber));
 
+   const nextMorning={
+     ...syntheticOrder(104,'ISSUER_A'),
+     scheduledStartDate:'20261117',
+     scheduledStartTime:'010000'
+   };
+   const afterRange={
+     ...syntheticOrder(105,'ISSUER_A'),
+     scheduledStartDate:'20261117',
+     scheduledStartTime:'040000'
+   };
+   for(const order of [nextMorning,afterRange])
+     assert.equal((await api('/api/v1/ris/worklist-orders',{method:'POST',body:order})).response.status,201);
+   const overnight=await query([
+     'IssuerOfPatientID=ISSUER_A','AccessionNumber',
+     '(0040,0100)[0].ScheduledProcedureStepStartDate=20261116-20261117',
+     '(0040,0100)[0].ScheduledProcedureStepStartTime=100000-020000'
+   ]);
+   assert.ok(overnight.includes(primary.accessionNumber));
+   assert.ok(overnight.includes(nextMorning.accessionNumber));
+   assert.ok(!overnight.includes(afterRange.accessionNumber));
+
    // RIS order -> worklist -> synthetic DICOM ingest -> explicit reconciliation.
    const before=(await api('/api/v1/ris/worklist-orders/'+created.data.order.id+'/reconciliation')).data;
    assert.equal(before.status,'not_received');
@@ -166,7 +196,7 @@ test('RIS scheduling API to DICOM MWL C-FIND, identifier issuer and cancellation
    const reconciled=(await api('/api/v1/ris/worklist-orders/'+created.data.order.id+'/reconciliation')).data;
    assert.equal(reconciled.status,'identity_consistent');
    assert.equal(reconciled.issuerOfPatientIdMatches,true);
-   assert.equal(reconciled.accessionIssuerVerified,false,'Accession issuer is NOT inferred from a bare number');
+   assert.equal(reconciled.accessionIssuerVerified,true);
    assert.equal(reconciled.automaticPatientMerge,false);
 
    // Same PatientID but WRONG issuer must remain an explicit mismatch.
@@ -177,6 +207,21 @@ test('RIS scheduling API to DICOM MWL C-FIND, identifier issuer and cancellation
    assert.equal(mismatch.status,'mismatch');
    assert.equal(mismatch.patientIdMatches,true);
    assert.equal(mismatch.issuerOfPatientIdMatches,false);
+
+   const scheduled=(await api('/api/v1/ris/worklist-orders?stationAet=MWL_TEST_AE')).data;
+   const reconcile=async order=>{
+     const {id}=scheduled.find(row=>row.accession_number===order.accessionNumber);
+     return (await api('/api/v1/ris/worklist-orders/'+id+'/reconciliation')).data;
+   };
+   assert.equal(await stow(syntheticStudy(nextMorning,104,'ISSUER_A','ISSUER_B'),'mwl-image-104'),200);
+   const wrongAccessionIssuer=await reconcile(nextMorning);
+   assert.equal(wrongAccessionIssuer.status,'mismatch');
+   assert.equal(wrongAccessionIssuer.issuerOfPatientIdMatches,true);
+   assert.equal(wrongAccessionIssuer.accessionIssuerMatches,false);
+   assert.equal(await stow(syntheticStudy(afterRange,105,'ISSUER_A',null),'mwl-image-105'),200);
+   const missingAccessionIssuer=await reconcile(afterRange);
+   assert.equal(missingAccessionIssuer.accessionIssuerMatches,null);
+   assert.equal(missingAccessionIssuer.accessionIssuerVerified,false);
  } finally {
    if(mwl)await mwl.close();
    delete process.env.PACS_MWL_EXPERIMENTAL;

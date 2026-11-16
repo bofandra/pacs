@@ -45,11 +45,28 @@ test('MWL sequence requires exactly one step and scopes station to calling AE',(
  assert.throws(()=>normalizeMwlQuery({UnknownMatchingKey:'X',
    ScheduledProcedureStepSequence:[{}]},{callingAet:'MWL_TEST_AE'}),/Unsupported/);
 });
+test('MWL validates range endpoints and combines date and time ranges across midnight',()=>{
+ const normalize=(date,time)=>normalizeMwlQuery({
+   ScheduledProcedureStepSequence:[{
+     ScheduledProcedureStepStartDate:date,
+     ScheduledProcedureStepStartTime:time
+   }]
+ },{callingAet:'MWL_TEST_AE'});
+ assert.deepEqual(normalize('20260228-20260301','2200-02').scheduleBounds,
+   ['20260228220000','20260301025959']);
+ assert.deepEqual(normalize('20260228-','22-').scheduleBounds,['20260228220000',null]);
+ assert.deepEqual(normalize('20260228','10-11').timeBounds,['100000','115959']);
+ assert.throws(()=>normalize('20260229-20260301','22-02'),/date/i);
+ assert.throws(()=>normalize('20260228-20260301','1260-13'),/time/i);
+ assert.throws(()=>normalize('20260228-20260301','100-13'),/time/i);
+ assert.throws(()=>normalize('20260228-20260228','22-02'),/reversed schedule/i);
+ assert.throws(()=>normalize('20260228','22-02'),/reversed time/i);
+});
 test('worklist SQL parameterizes wildcards; only scheduled rows for calling station',async()=>{
  let seen;
  const dbRow={
    patient_id:'SYNTHETIC001',issuer_of_patient_id:'RS_TEST',patient_name:'SYNTHETIC^PATIENT',
-   accession_number:'ACC202611150001',study_instance_uid:'2.25.12345',
+   accession_number:'ACC202611150001',accession_issuer:'RS_TEST',study_instance_uid:'2.25.12345',
    requested_procedure_id:'RP123',requested_procedure_description:'Chest radiography',
    scheduled_station_aet:'MWL_TEST_AE',modality:'CR',
    scheduled_start_date:'20261115',scheduled_start_time:'103000',
@@ -64,6 +81,7 @@ test('worklist SQL parameterizes wildcards; only scheduled rows for calling stat
  assert.equal(response.length,1);
  assert.equal(response[0].PatientID,'SYNTHETIC001');
  assert.equal(response[0].IssuerOfPatientID,'RS_TEST');
+ assert.deepEqual(response[0].IssuerOfAccessionNumberSequence,[{LocalNamespaceEntityID:'RS_TEST'}]);
  assert.equal(response[0].ScheduledProcedureStepSequence[0].Modality,'CR');
  assert.equal(response[0].SpecificCharacterSet,'ISO_IR 192');
  assert.ok(seen.sql.includes("status='scheduled'"));

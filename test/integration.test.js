@@ -10,7 +10,8 @@ import { PacsCatalog } from '../src/catalog.js';
 import { processDeliveryJob } from '../src/delivery-worker.js';
 import { once } from 'node:events';
 import dimsePackage from 'dcmjs-dimse';
-import { startFindScp } from '../src/find-scp.js';
+import { LoopbackDimseServer, startFindScp } from '../src/find-scp.js';
+import { createStoreScpClass } from '../src/store-scp.js';
 import {spawn,execFile as execFileCallback} from 'node:child_process';
 import {promisify} from 'node:util';
 const execFile=promisify(execFileCallback);
@@ -32,7 +33,9 @@ function attr(group,element,vr,value){
 }
 function u16(value){const b=Buffer.alloc(2);b.writeUInt16LE(value);return b;}
 function makeSyntheticDicom(ids){
-  const sopClass='1.2.840.10008.5.1.4.1.1.1'; // CR Image Storage
+  const sopClass=ids.modality==='MR'
+    ?'1.2.840.10008.5.1.4.1.1.4'
+    :'1.2.840.10008.5.1.4.1.1.1';
   const meta=Buffer.concat([
     attr(0x0002,0x0001,'OB',Buffer.from([0,1])),
     attr(0x0002,0x0002,'UI',sopClass),
@@ -47,7 +50,7 @@ function makeSyntheticDicom(ids){
     attr(0x0008,0x0016,'UI',sopClass),
     attr(0x0008,0x0018,'UI',ids.instance),
     attr(0x0008,0x0020,'DA','20261115'),
-    attr(0x0008,0x0060,'CS','CR'),
+    attr(0x0008,0x0060,'CS',ids.modality??'CR'),
     attr(0x0010,0x0010,'PN',ids.name??'TEST^SYNTHETIC'),
     attr(0x0010,0x0020,'LO','SYNTHETIC-001'),
     attr(0x0020,0x000D,'UI',ids.study),
@@ -100,6 +103,10 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     const studies=await request('/dicomweb/studies?StudyInstanceUID='+ids.study);
     const found=await studies.json();
     assert.equal(found.length,1);assert.equal(found[0]['0020000D'].Value[0],ids.study);
+    const filtered=await request('/dicomweb/studies?00100020=SYNTHETIC-001&0020000d='+ids.study);
+    assert.deepEqual(await filtered.json(),found);
+    const unmatched=await request('/dicomweb/studies?00100020=OTHER&0020000D='+ids.study);
+    assert.deepEqual(await unmatched.json(),[]);
     const series=await request('/dicomweb/studies/'+ids.study+'/series');
     assert.equal((await series.json()).length,1);
     const instances=await request('/dicomweb/studies/'+ids.study+'/series/'+ids.series+'/instances');
@@ -168,7 +175,7 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     // Route creation is deliberately disabled by default.
     const routeCreate=await request('/api/v1/routing/rules',{
       method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({destinationAet:'SIMULATOR',modality:'CR'})});
+      body:JSON.stringify({destinationAet:'SIMULATOR',modality:'MR'})});
     assert.equal(routeCreate.status,201);
     const rule=await routeCreate.json();
     assert.equal(rule.enabled,false);
@@ -178,7 +185,9 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
     assert.equal((await ruleEnable.json()).enabled,true);
     const catalog=new PacsCatalog(config());
     try {
-      const routed={study:uid(),series:uid(),instance:uid()};
+      // The other integration files share the catalog, but their C-STORE/STOW
+      // fixtures use CR and CT. Only this test should enqueue MR delivery jobs.
+      const routed={study:uid(),series:uid(),instance:uid(),modality:'MR'};
       const routedBytes=makeSyntheticDicom(routed);
       const routedPart=buildDicomMultipart(routedBytes,'routed-test-boundary');
       const ingestRouted=()=>request('/dicomweb/studies',{
@@ -200,7 +209,7 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
       assert.equal(afterDuplicate.length,1,'duplicated DICOM must not enqueue another delivery');
 
       // Failure causes persistent retry; simulate the backoff expiring in CI.
-      const needsRetry={study:uid(),series:uid(),instance:uid()};
+      const needsRetry={study:uid(),series:uid(),instance:uid(),modality:'MR'};
       const retryPart=buildDicomMultipart(makeSyntheticDicom(needsRetry),'retry-boundary');
       assert.equal((await request('/dicomweb/studies',{
         method:'POST',headers:{'Content-Type':retryPart.type},body:retryPart.data})).status,200);
@@ -220,7 +229,7 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
         .find(job=>job.instance_uid===needsRetry.instance);
       assert.equal(succeeded.attempts,2);
 
-      const dead={study:uid(),series:uid(),instance:uid()};
+      const dead={study:uid(),series:uid(),instance:uid(),modality:'MR'};
       const deadPart=buildDicomMultipart(makeSyntheticDicom(dead),'dead-letter-boundary');
       assert.equal((await request('/dicomweb/studies',{
         method:'POST',headers:{'Content-Type':deadPart.type},body:deadPart.data})).status,200);
@@ -240,7 +249,7 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
       assert.equal(ruleDisable.status,200);
 
       // Disabled rules create no automatic jobs; manual enqueue is explicit and idempotent.
-      const noRoute={study:uid(),series:uid(),instance:uid()};
+      const noRoute={study:uid(),series:uid(),instance:uid(),modality:'MR'};
       const noRoutePart=buildDicomMultipart(makeSyntheticDicom(noRoute),'disabled-rule-boundary');
       const nr=await request('/dicomweb/studies',{
         method:'POST',headers:{'Content-Type':noRoutePart.type},body:noRoutePart.data});
@@ -274,6 +283,12 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({host:'127.0.0.1',port:32191,enabled:true})});
     assert.equal(aeDest.status,200);
+    if(process.env.PACS_DCMTK==='1') {
+      const rejectingDest=await request('/api/v1/aes/DEST_PARTIAL',{method:'PUT',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({host:'127.0.0.1',port:32197,enabled:true})});
+      assert.equal(rejectingDest.status,200);
+    }
     process.env.PACS_FIND_EXPERIMENTAL='1';
     process.env.PACS_MOVE_EXPERIMENTAL='1';
     process.env.PACS_GET_EXPERIMENTAL='1';
@@ -334,8 +349,27 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
         assert.ok(output.includes('SYNTHETIC-001'),'DCMTK response must include PatientID');
       }
       if(process.env.PACS_DCMTK==='1') {
-        // Independent DCMTK C-MOVE SCU and C-STORE SCP interoperability test.
-        // Only synthetic Part 10 files are used; destination AE must be registered.
+        const moveStudy={study:uid(),series:uid()};
+        const moveInstances=[uid(),uid()];
+        for(const instance of moveInstances) {
+          const part=buildDicomMultipart(makeSyntheticDicom({...moveStudy,instance}));
+          assert.equal((await request('/dicomweb/studies',{
+            method:'POST',headers:{'Content-Type':part.type},body:part.data
+          })).status,200);
+        }
+        const movescu=async destination=>{
+          const args=[
+            '-S','-d','-aet','SIMULATOR','-aec','PACS_NATIVE','-aem',destination,
+            '-k','QueryRetrieveLevel=STUDY','-k','StudyInstanceUID='+moveStudy.study,
+            '127.0.0.1','32190'
+          ];
+          const result=await execFile('movescu',args,{timeout:25000,maxBuffer:2000000})
+            .catch(error=>{
+              if(destination==='DEST_PARTIAL'&&error.code===68)return error;
+              throw error;
+            });
+          return result.stdout+result.stderr;
+        };
         const storeScp=spawn('storescp',[
           '-aet','DEST_SCP','-od',outputRoot,'32191'
         ],{stdio:'ignore'});
@@ -353,33 +387,77 @@ test('PostgreSQL + STOW/QIDO/WADO roundtrip and duplicate safety',{skip:!enabled
             }catch{await delay(100);}
           }
           assert.equal(listening,true,'DCMTK storescp must accept local connections');
-          const moveResult=await execFile('movescu',[
-            '-S','-v','-aet','SIMULATOR','-aec','PACS_NATIVE','-aem','DEST_SCP',
-            '-k','QueryRetrieveLevel=STUDY','-k','StudyInstanceUID='+ids.study,
-            '127.0.0.1','32190'
-          ],{timeout:25000,maxBuffer:2000000});
-          const output=moveResult.stdout+moveResult.stderr;
-          assert.match(output,/Success|0x0000/i,'C-MOVE must end with DICOM Success');
-          let received=[];
-          for(let n=0;n<40;n++) {
-            received=await fs.readdir(outputRoot,{recursive:true});
-            if(received.length)break;
-            await delay(100);
-          }
-          const candidates=[];
-          for(const name of received) {
-            const full=path.join(outputRoot,name);
-            if((await fs.stat(full)).isFile()) candidates.push(full);
-          }
-          assert.ok(candidates.length>0,'DCMTK storescp must persist received instance');
-          const parsedCandidates=await Promise.all(candidates.map(async p=>parseDicom(await fs.readFile(p))));
-          assert.ok(parsedCandidates.some(x=>x.instanceUID===ids.instance),
-            'C-MOVE destination must receive SOP Instance UID matching PACS study');
+          const output=await movescu('DEST_SCP');
+          assert.match(output,/DIMSE Status\s*:\s*0xff00:\s*Pending/i);
+          const final=output.split('Received Final Move Response').at(-1);
+          assert.match(final,/DIMSE Status\s*:\s*0x0000:\s*Success/i);
+          assert.match(final,/Completed Suboperations\s*:\s*2/i);
+          const files=await fs.readdir(outputRoot);
+          const received=await Promise.all(files.map(async file=>
+            parseDicom(await fs.readFile(path.join(outputRoot,file))).instanceUID));
+          assert.deepEqual(received.sort(),[...moveInstances].sort());
+
+          const queued=await request('/api/v1/delivery/jobs',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({instanceUID:ids.instance,destinationAet:'DEST_SCP'})
+          });
+          assert.equal(queued.status,202);
+          const {id}=await queued.json();
+          const deliveryCatalog=new PacsCatalog(config());
+          try {
+            assert.deepEqual(await processDeliveryJob(deliveryCatalog),
+              {jobId:Number(id),status:'succeeded'});
+            const delivered=await Promise.all((await fs.readdir(outputRoot)).map(async file=>
+              parseDicom(await fs.readFile(path.join(outputRoot,file))).instanceUID));
+            assert.ok(delivered.includes(ids.instance),'Worker C-STORE must reach independent DCMTK receiver');
+          }finally{await deliveryCatalog.close();}
         } finally {
           storeScp.kill('SIGTERM');
           await delay(150);
           if(storeScp.exitCode===null)storeScp.kill('SIGKILL');
         }
+        const attempted=[];
+        let rejectUID=moveInstances[1];
+        const rejectingReceiver=new LoopbackDimseServer(createStoreScpClass({
+          aet:'DEST_PARTIAL',
+          peers:new Map([['PACS_NATIVE',{enabled:true,host:'127.0.0.1'}]]),
+          catalog:{ingest:async bytes=>{
+            const {instanceUID}=parseDicom(bytes);
+            attempted.push(instanceUID);
+            if(instanceUID===rejectUID)throw new Error('Test receiver rejected instance');
+            return {status:'stored'};
+          }}
+        }));
+        rejectingReceiver.listen(32197,{associationTimeout:5000,pduTimeout:5000});
+        try {
+          if(!rejectingReceiver.server.listening)await once(rejectingReceiver,'listening');
+          const partial=await movescu('DEST_PARTIAL');
+          const final=partial.split('Received Final Move Response').at(-1);
+          assert.match(final,/DIMSE Status\s*:\s*0xb000:\s*Warning/i);
+          assert.match(final,/Completed Suboperations\s*:\s*1/i);
+          assert.match(final,/Failed Suboperations\s*:\s*1/i);
+          assert.ok(partial.includes(moveInstances[1]),'Response must report the failed SOP UID');
+          assert.deepEqual(attempted.sort(),[...moveInstances].sort());
+
+          const queued=await request('/api/v1/delivery/jobs',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({instanceUID:rejectUID,destinationAet:'DEST_PARTIAL'})
+          });
+          assert.equal(queued.status,202);
+          const {id}=await queued.json();
+          const deliveryCatalog=new PacsCatalog(config());
+          try {
+            assert.deepEqual(await processDeliveryJob(deliveryCatalog),
+              {jobId:Number(id),status:'queued',errorCode:'DIMSE_ASSOCIATION_FAILED'});
+            await deliveryCatalog.pool.query('UPDATE delivery_jobs SET next_attempt_at=now() WHERE id=$1',[id]);
+            rejectUID=null;
+            assert.deepEqual(await processDeliveryJob(deliveryCatalog),
+              {jobId:Number(id),status:'succeeded'});
+            const {rows:[job]}=await deliveryCatalog.pool.query('SELECT attempts FROM delivery_jobs WHERE id=$1',[id]);
+            assert.equal(job.attempts,2);
+            assert.deepEqual(attempted.slice(-2),[moveInstances[1],moveInstances[1]]);
+          }finally{await deliveryCatalog.close();}
+        } finally {rejectingReceiver.close();}
       }
       if(process.env.PACS_DCMTK==='1') {
         // Independent DCMTK getscu uses ONE association for C-GET and C-STORE.

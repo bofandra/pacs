@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import {validUID} from './dicom.js';
+import {validDicomDate,validUID} from './dicom.js';
 
 export class WorklistOrderError extends Error {
   constructor(message,statusCode=400) {super(message);this.statusCode=statusCode;}
@@ -15,12 +15,6 @@ const required={
 };
 const optional={patientBirthDate:8,patientSex:1};
 const allowedFields=new Set([...Object.keys(required),...Object.keys(optional)]);
-function dateValid(s) {
-  if(!/^\d{8}$/.test(s))return false;
-  const y=Number(s.slice(0,4)),m=Number(s.slice(4,6)),d=Number(s.slice(6,8));
-  const date=new Date(Date.UTC(y,m-1,d));
-  return date.getUTCFullYear()===y&&date.getUTCMonth()===m-1&&date.getUTCDate()===d;
-}
 function timeValid(s){return /^\d{6}$/.test(s)&&Number(s.slice(0,2))<24
   &&Number(s.slice(2,4))<60&&Number(s.slice(4,6))<60;}
 export function normalizeWorklistOrder(input) {
@@ -44,9 +38,9 @@ export function normalizeWorklistOrder(input) {
     fail('Invalid Scheduled Station AE Title');
   if(!/^[A-Z0-9]{1,8}$/.test(normalized.modality))
     fail('Invalid Modality');
-  if(!dateValid(normalized.scheduledStartDate))fail('Invalid scheduled date');
+  if(!validDicomDate(normalized.scheduledStartDate))fail('Invalid scheduled date');
   if(!timeValid(normalized.scheduledStartTime))fail('Invalid scheduled time');
-  if(normalized.patientBirthDate&&!dateValid(normalized.patientBirthDate))
+  if(normalized.patientBirthDate&&!validDicomDate(normalized.patientBirthDate))
     fail('Invalid patient birth date');
   if(normalized.patientSex&&!['M','F','O'].includes(normalized.patientSex))
     fail('Invalid patient sex');
